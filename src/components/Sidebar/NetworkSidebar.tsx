@@ -10,9 +10,11 @@ import {
   Layers,
   Eye,
   EyeOff,
+  GitCommit,
 } from 'lucide-react';
 import { useTransportStore } from '../../store/useTransportStore';
 import type { TransportMode } from '../../types/transport';
+import { LineThermometer } from './LineThermometer';
 
 const PRESET_COLORS = [
   '#0ea5e9', // Bleu ciel
@@ -48,9 +50,9 @@ export const NetworkSidebar: React.FC = () => {
     toggleLineVisibility,
     createLine,
     updateLine,
-    deleteLine,
     updateStop,
     deleteStop,
+    deleteLine,
   } = useTransportStore();
 
   const [activeTab, setActiveTab] = useState<'lines' | 'stops'>('lines');
@@ -66,7 +68,7 @@ export const NetworkSidebar: React.FC = () => {
     e.preventDefault();
     if (!newLineName.trim()) return;
 
-    createLine({
+    const newId = createLine({
       name: newLineName.trim(),
       shortName: newLineShortName.trim() || 'L1',
       color: newLineColor,
@@ -77,10 +79,17 @@ export const NetworkSidebar: React.FC = () => {
     setNewLineName('');
     setNewLineShortName(`L${Object.keys(lines).length + 2}`);
     setShowCreateModal(false);
+    setSelectedElement({ type: 'line', id: newId });
   };
 
   const lineList = Object.values(lines);
   const stopList = Object.values(stops);
+
+  // Ligne actuellement sélectionnée pour le thermomètre
+  const selectedLine =
+    selectedElement?.type === 'line' && lines[selectedElement.id]
+      ? lines[selectedElement.id]
+      : null;
 
   return (
     <aside className="network-sidebar">
@@ -108,191 +117,229 @@ export const NetworkSidebar: React.FC = () => {
         {/* ================= ONGLET LIGNES ================= */}
         {activeTab === 'lines' && (
           <div className="tab-pane">
-            <div className="pane-header">
-              <h3>Réseau de Lignes</h3>
-              <button
-                type="button"
-                className="add-element-btn"
-                onClick={() => setShowCreateModal(!showCreateModal)}
-              >
-                <Plus size={15} />
-                <span>Nouvelle Ligne</span>
-              </button>
-            </div>
-
-            {/* Formulaire de création rapide de ligne */}
-            {showCreateModal && (
-              <form className="create-line-form" onSubmit={handleCreateLineSubmit}>
-                <h4>Créer une nouvelle ligne</h4>
-                <div className="form-group">
-                  <label>Nom de la ligne</label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Ligne 1 - Universités <-> Gare"
-                    value={newLineName}
-                    onChange={(e) => setNewLineName(e.target.value)}
-                    required
-                    autoFocus
-                  />
-                </div>
-
-                <div className="form-row">
-                  <div className="form-group flex-1">
-                    <label>Code court</label>
-                    <input
-                      type="text"
-                      placeholder="T1, M1, 42..."
-                      value={newLineShortName}
-                      onChange={(e) => setNewLineShortName(e.target.value)}
-                      maxLength={5}
-                    />
-                  </div>
-
-                  <div className="form-group flex-1">
-                    <label>Mode</label>
-                    <select
-                      value={newLineMode}
-                      onChange={(e) => setNewLineMode(e.target.value as TransportMode)}
-                    >
-                      <option value="tram">Tramway</option>
-                      <option value="metro">Métro</option>
-                      <option value="bus">Bus</option>
-                      <option value="train">Train</option>
-                      <option value="cable_car">Téléphérique</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Couleur</label>
-                  <div className="color-presets-row">
-                    {PRESET_COLORS.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`color-dot-btn ${newLineColor === c ? 'selected' : ''}`}
-                        style={{ backgroundColor: c }}
-                        onClick={() => setNewLineColor(c)}
-                      />
-                    ))}
-                    <input
-                      type="color"
-                      value={newLineColor}
-                      onChange={(e) => setNewLineColor(e.target.value)}
-                      className="custom-color-input"
-                      title="Couleur personnalisée"
-                    />
-                  </div>
-                </div>
-
-                <div className="form-actions">
+            {/* Si une ligne est sélectionnée, afficher directement son Thermomètre exhaustif */}
+            {selectedLine ? (
+              <LineThermometer
+                line={selectedLine}
+                onBack={() => setSelectedElement(null)}
+              />
+            ) : (
+              <>
+                <div className="pane-header">
+                  <h3>Réseau de Lignes</h3>
                   <button
                     type="button"
-                    className="btn-cancel"
-                    onClick={() => setShowCreateModal(false)}
+                    className="add-element-btn"
+                    onClick={() => setShowCreateModal(!showCreateModal)}
                   >
-                    Annuler
-                  </button>
-                  <button type="submit" className="btn-submit">
-                    Créer et tracer
+                    <Plus size={15} />
+                    <span>Nouvelle Ligne</span>
                   </button>
                 </div>
-              </form>
-            )}
 
-            {/* Liste des lignes existantes */}
-            {lineList.length === 0 ? (
-              <div className="empty-state">
-                <Route size={32} className="empty-icon" />
-                <p>Aucune ligne créée pour le moment.</p>
-                <span>Créez une première ligne pour commencer à relier vos arrêts.</span>
-              </div>
-            ) : (
-              <div className="lines-list">
-                {lineList.map((line) => {
-                  const isCurrentActive = activeLineId === line.id;
-                  const isSelected = selectedElement?.type === 'line' && selectedElement.id === line.id;
-                  const isVisible = line.isActive !== false;
+                {/* Formulaire de création rapide de ligne */}
+                {showCreateModal && (
+                  <form className="create-line-form" onSubmit={handleCreateLineSubmit}>
+                    <h4>Créer une nouvelle ligne</h4>
+                    <div className="form-group">
+                      <label>Nom de la ligne</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Ligne 1 - Universités <-> Gare"
+                        value={newLineName}
+                        onChange={(e) => setNewLineName(e.target.value)}
+                        required
+                        autoFocus
+                      />
+                    </div>
 
-                  // Calculer le nombre d'arrêts et de waypoints dans la ligne
-                  const stopCount = line.pathNodeIds.filter((id) => stops[id]).length;
-                  const wpCount = line.pathNodeIds.filter((id) => waypoints[id]).length;
-
-                  return (
-                    <div
-                      key={line.id}
-                      className={`line-card ${isSelected ? 'selected' : ''} ${isCurrentActive ? 'drawing-active' : ''} ${!isVisible ? 'line-hidden' : ''}`}
-                      onClick={() => setSelectedElement({ type: 'line', id: line.id })}
-                    >
-                      <div className="line-card-header">
-                        <span
-                          className="line-badge"
-                          style={{ backgroundColor: line.color, opacity: isVisible ? 1 : 0.4 }}
-                        >
-                          {line.shortName}
-                        </span>
-                        <div className="line-title-group">
-                          <span className="line-name">{line.name}</span>
-                          <span className="line-mode-tag">
-                            {MODE_LABELS[line.mode].icon}
-                            {MODE_LABELS[line.mode].label}
-                          </span>
-                        </div>
-
-                        {/* Bouton pour afficher / masquer individuellement cette ligne */}
-                        <button
-                          type="button"
-                          className={`btn-line-visibility ${isVisible ? 'visible' : 'hidden'}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleLineVisibility(line.id);
-                          }}
-                          title={isVisible ? 'Masquer la ligne sur la carte' : 'Afficher la ligne sur la carte'}
-                        >
-                          {isVisible ? <Eye size={15} /> : <EyeOff size={15} />}
-                        </button>
+                    <div className="form-row">
+                      <div className="form-group flex-1">
+                        <label>Code court</label>
+                        <input
+                          type="text"
+                          placeholder="T1, M1, 42..."
+                          value={newLineShortName}
+                          onChange={(e) => setNewLineShortName(e.target.value)}
+                          maxLength={5}
+                        />
                       </div>
 
-                      <div className="line-stats-row">
-                        <span>{stopCount} arrêts</span>
-                        {wpCount > 0 && <span>• {wpCount} virages</span>}
-                        <span>• ~{line.averageSpeedKmh} km/h</span>
-                        {!isVisible && <span className="hidden-badge">• Masquée</span>}
-                      </div>
-
-                      <div className="line-card-actions">
-                        <button
-                          type="button"
-                          className={`btn-trace ${isCurrentActive ? 'active' : ''}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveLineId(line.id);
-                            setActiveTool('draw_line');
-                          }}
-                          title="Tracer ou continuer cette ligne"
+                      <div className="form-group flex-1">
+                        <label>Mode</label>
+                        <select
+                          value={newLineMode}
+                          onChange={(e) => setNewLineMode(e.target.value as TransportMode)}
                         >
-                          <PenTool size={13} />
-                          <span>{isCurrentActive ? 'En cours de tracé' : 'Tracer'}</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          className="btn-icon-delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (window.confirm(`Supprimer la ligne ${line.name} ?`)) {
-                              deleteLine(line.id);
-                            }
-                          }}
-                          title="Supprimer la ligne"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                          <option value="tram">Tramway</option>
+                          <option value="metro">Métro</option>
+                          <option value="bus">Bus</option>
+                          <option value="train">Train</option>
+                          <option value="cable_car">Téléphérique</option>
+                        </select>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    <div className="form-group">
+                      <label>Couleur</label>
+                      <div className="color-presets-row">
+                        {PRESET_COLORS.map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            className={`color-dot-btn ${newLineColor === c ? 'selected' : ''}`}
+                            style={{ backgroundColor: c }}
+                            onClick={() => setNewLineColor(c)}
+                          />
+                        ))}
+                        <input
+                          type="color"
+                          value={newLineColor}
+                          onChange={(e) => setNewLineColor(e.target.value)}
+                          className="custom-color-input"
+                          title="Couleur personnalisée"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="btn-cancel"
+                        onClick={() => setShowCreateModal(false)}
+                      >
+                        Annuler
+                      </button>
+                      <button type="submit" className="btn-submit">
+                        Créer et ouvrir
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Liste des lignes existantes */}
+                {lineList.length === 0 ? (
+                  <div className="empty-state">
+                    <Route size={32} className="empty-icon" />
+                    <p>Aucune ligne créée pour le moment.</p>
+                    <span>Créez une première ligne pour commencer à relier vos arrêts.</span>
+                  </div>
+                ) : (
+                  <div className="lines-list">
+                    {lineList.map((line) => {
+                      const isCurrentActive = activeLineId === line.id;
+                      const isVisible = line.isActive !== false;
+
+                      // Calculer le nombre d'arrêts et de waypoints dans la ligne
+                      const stopCount = line.pathNodeIds.filter((id) => stops[id]).length;
+                      const wpCount = line.pathNodeIds.filter((id) => waypoints[id]).length;
+
+                      return (
+                        <div
+                          key={line.id}
+                          className={`line-card ${isCurrentActive ? 'drawing-active' : ''} ${!isVisible ? 'line-hidden' : ''}`}
+                          onClick={() => setSelectedElement({ type: 'line', id: line.id })}
+                        >
+                          <div className="line-card-header">
+                            <label
+                              className="line-badge-color-wrapper"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Cliquer pour changer la couleur de la ligne"
+                            >
+                              <span
+                                className="line-badge"
+                                style={{ backgroundColor: line.color, opacity: isVisible ? 1 : 0.4 }}
+                              >
+                                {line.shortName}
+                              </span>
+                              <input
+                                type="color"
+                                value={line.color}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  updateLine(line.id, { color: e.target.value });
+                                }}
+                                className="hidden-color-input"
+                              />
+                            </label>
+                            <div className="line-title-group">
+                              <span className="line-name">{line.name}</span>
+                              <span className="line-mode-tag">
+                                {MODE_LABELS[line.mode].icon}
+                                {MODE_LABELS[line.mode].label}
+                              </span>
+                            </div>
+
+                            {/* Bouton pour afficher / masquer individuellement cette ligne */}
+                            <button
+                              type="button"
+                              className={`btn-line-visibility ${isVisible ? 'visible' : 'hidden'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleLineVisibility(line.id);
+                              }}
+                              title={isVisible ? 'Masquer la ligne sur la carte' : 'Afficher la ligne sur la carte'}
+                            >
+                              {isVisible ? <Eye size={15} /> : <EyeOff size={15} />}
+                            </button>
+                          </div>
+
+                          <div className="line-stats-row">
+                            <span>{stopCount} arrêts</span>
+                            {wpCount > 0 && <span>• {wpCount} virages</span>}
+                            <span>• ~{line.averageSpeedKmh} km/h</span>
+                            {!isVisible && <span className="hidden-badge">• Masquée</span>}
+                          </div>
+
+                          <div className="line-card-actions">
+                            <button
+                              type="button"
+                              className="btn-trace"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedElement({ type: 'line', id: line.id });
+                              }}
+                              title="Voir le schéma et le thermomètre de ligne"
+                            >
+                              <GitCommit size={13} />
+                              <span>Thermomètre</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className={`btn-trace ${isCurrentActive ? 'active' : ''}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveLineId(line.id);
+                                setActiveTool('draw_line');
+                                setSelectedElement({ type: 'line', id: line.id });
+                              }}
+                              title="Tracer ou continuer cette ligne"
+                            >
+                              <PenTool size={13} />
+                              <span>{isCurrentActive ? 'En tracé' : 'Tracer'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn-icon-delete"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (window.confirm(`Supprimer la ligne ${line.name} ?`)) {
+                                  deleteLine(line.id);
+                                }
+                              }}
+                              title="Supprimer la ligne"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -395,68 +442,33 @@ export const NetworkSidebar: React.FC = () => {
         )}
       </div>
 
-      {/* ================= INSPECTEUR DE SÉLECTION EN BAS DE SIDEBAR ================= */}
-      {selectedElement && (
+      {/* ================= INSPECTEUR EN BAS POUR LES ARRÊTS SÉLECTIONNÉS ================= */}
+      {selectedElement && selectedElement.type === 'stop' && stops[selectedElement.id] && (
         <div className="sidebar-inspector">
-          {selectedElement.type === 'stop' && stops[selectedElement.id] && (
-            <div className="inspector-card">
-              <div className="inspector-header">
-                <h4>Propriétés de la Station</h4>
-                <button
-                  type="button"
-                  className="close-inspector"
-                  onClick={() => setSelectedElement(null)}
-                >
-                  ✕
-                </button>
-              </div>
-              <div className="form-group">
-                <label>Nom de la station</label>
-                <input
-                  type="text"
-                  value={stops[selectedElement.id].name}
-                  onChange={(e) => updateStop(selectedElement.id, { name: e.target.value })}
-                />
-              </div>
-              <div className="inspector-meta">
-                <span>Lat: {stops[selectedElement.id].coordinates.lat.toFixed(5)}</span>
-                <span>Lng: {stops[selectedElement.id].coordinates.lng.toFixed(5)}</span>
-              </div>
+          <div className="inspector-card">
+            <div className="inspector-header">
+              <h4>Propriétés de la Station</h4>
+              <button
+                type="button"
+                className="close-inspector"
+                onClick={() => setSelectedElement(null)}
+              >
+                ✕
+              </button>
             </div>
-          )}
-
-          {selectedElement.type === 'line' && lines[selectedElement.id] && (
-            <div className="inspector-card">
-              <div className="inspector-header">
-                <h4>Propriétés de la Ligne</h4>
-                <button
-                  type="button"
-                  className="close-inspector"
-                  onClick={() => setSelectedElement(null)}
-                >
-                  ✕
-                </button>
-              </div>
-              <div className="form-group">
-                <label>Nom</label>
-                <input
-                  type="text"
-                  value={lines[selectedElement.id].name}
-                  onChange={(e) => updateLine(selectedElement.id, { name: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Vitesse commerciale (km/h)</label>
-                <input
-                  type="number"
-                  value={lines[selectedElement.id].averageSpeedKmh}
-                  onChange={(e) =>
-                    updateLine(selectedElement.id, { averageSpeedKmh: Number(e.target.value) || 20 })
-                  }
-                />
-              </div>
+            <div className="form-group">
+              <label>Nom de la station</label>
+              <input
+                type="text"
+                value={stops[selectedElement.id].name}
+                onChange={(e) => updateStop(selectedElement.id, { name: e.target.value })}
+              />
             </div>
-          )}
+            <div className="inspector-meta">
+              <span>Lat: {stops[selectedElement.id].coordinates.lat.toFixed(5)}</span>
+              <span>Lng: {stops[selectedElement.id].coordinates.lng.toFixed(5)}</span>
+            </div>
+          </div>
         </div>
       )}
     </aside>

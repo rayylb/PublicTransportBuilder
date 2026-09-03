@@ -1,6 +1,6 @@
 # 📘 Public Transport Builder — Documentation Technique & Récapitulatif Exhaustif
 
-Ce document récapitule l'intégralité du travail réalisé sur le projet **Public Transport Builder**, les choix d'architecture, la modélisation des données en *Property Graph*, le fonctionnement du moteur cartographique hybride (MapLibre + SVG + DOM) et la gestion d'état réactive avec Zustand.
+Ce document récapitule l'intégralité du travail réalisé sur le projet **Public Transport Builder**, les choix d'architecture, la modélisation des données en *Property Graph*, le fonctionnement du moteur cartographique hybride (MapLibre + SVG + DOM), le calcul géodésique des distances réelles, le tracé parallèle des tronçons partagés et le Thermomètre de Ligne.
 
 ---
 
@@ -10,14 +10,18 @@ Ce document récapitule l'intégralité du travail réalisé sur le projet **Pub
 3. [Gestion d'État Réactive avec Zustand](#3-gestion-détat-réactive-avec-zustand)
 4. [Moteur Cartographique & Rendu Hybride](#4-moteur-cartographique--rendu-hybride)
    - [A. Initialisation de MapLibre et Fonds de Carte](#a-initialisation-de-maplibre-et-fonds-de-carte)
-   - [B. Le Problème d'Ancrage des Marqueurs et la Solution Géométrique $0\times0$ px](#b-le-problème-dancrage-des-marqueurs-et-la-solution-géométrique-0times0-px)
-   - [C. Le Calque Vectoriel SVG à Projection Directe (`map.project()`)](#c-le-calque-vectoriel-svg-à-projection-directe-mapproject)
-5. [Interface Utilisateur & Ergonomie](#5-interface-utilisateur--ergonomie)
+   - [B. Stations en Points Noirs Purs & Calque au-dessus des Lignes](#b-stations-en-points-noirs-purs--calque-au-dessus-des-lignes)
+   - [C. Rendu en Parallèle des Tronçons Communs (`transitGeometry.ts`)](#c-rendu-en-parallèle-des-tronçons-communs-transitgeometryts)
+5. [Moteur Géodésique & Thermomètre de Ligne](#5-moteur-géodésique--thermomètre-de-ligne)
+   - [A. Calcul des Distances Réelles (Haversine)](#a-calcul-des-distances-réelles-haversine)
+   - [B. Le Thermomètre de Ligne Interactif](#b-le-thermomètre-de-ligne-interactif)
+   - [C. Tracé Bidirectionnel & Extension en Tête de Ligne (Prepend)](#c-tracé-bidirectionnel--extension-en-tête-de-ligne-prepend)
+6. [Interface Utilisateur & Ergonomie](#6-interface-utilisateur--ergonomie)
    - [A. Disposition Split-Screen (50% Menu / 50% Carte)](#a-disposition-split-screen-50-menu--50-carte)
-   - [B. Fenêtre d'Édition In-Place sur l'Arrêt](#b-fenêtre-dédition-in-place-sur-larrêt)
-   - [C. Contrôles de Visibilité (Étiquettes & Lignes)](#c-contrôles-de-visibilité-étiquettes--lignes)
-6. [Arborescence Complète du Projet](#6-arborescence-complète-du-projet)
-7. [Feuille de Route pour la Prochaine Étape (Calcul d'Itinéraire)](#7-feuille-de-route-pour-la-prochaine-étape-calcul-ditinéraire)
+   - [B. Changement Rapide de Couleur de Ligne (1 Clic)](#b-changement-rapide-de-couleur-de-ligne-1-clic)
+   - [C. Fenêtre d'Édition In-Place sur l'Arrêt](#c-fenêtre-dédition-in-place-sur-larrêt)
+7. [Arborescence Complète du Projet](#7-arborescence-complète-du-projet)
+8. [Feuille de Route pour la Prochaine Étape (Calcul d'Itinéraire)](#8-feuille-de-route-pour-la-prochaine-étape-calcul-ditinéraire)
 
 ---
 
@@ -28,7 +32,11 @@ Créer un outil cartographique interactif inspiré de *Google MyMaps*, spéciali
 L'application permet :
 1. De placer des **arrêts commerciaux** (stations).
 2. De tracer des **lignes de transport** en reliant des arrêts et en insérant des **points de virage (waypoints)**.
-3. De modéliser l'ensemble sous forme de **graphe de propriétés (Property Graph)** afin d'exécuter ultérieurement des algorithmes de calcul d'itinéraire (Dijkstra, A*, recherche de correspondances).
+3. D'afficher les **tronçons communs partagés par plusieurs lignes en parallèle côte à côte** sans chevauchement.
+4. De changer la **couleur d'une ligne en 1 clic** (pastilles rapides, badge cliquable, sélecteur libre).
+5. D'étendre les lignes dans les deux directions (**au Départ** ou **au Terminus**) et d'inverser le sens à tout moment.
+6. D'afficher le **thermomètre de ligne** avec distances inter-stations réelles, temps de parcours et correspondances.
+7. De modéliser l'ensemble sous forme de **graphe de propriétés (Property Graph)** afin d'exécuter ultérieurement des algorithmes de calcul d'itinéraire (Dijkstra, A*, recherche de correspondances).
 
 ### 🛠️ Stack Technologique
 * **React 19 & TypeScript :** Typage strict, composants fonctionnels, hooks personnalisés.
@@ -101,87 +109,12 @@ export interface TransportLine {
 }
 ```
 
-### 4. L'Arête de Graphe (`TransportEdge`) — Prévue pour le Calcul d'Itinéraire
-```typescript
-export interface TransportEdge {
-  id: string;
-  sourceNodeId: string;
-  targetNodeId: string;
-  lineId?: string;          // Si tronçon en transport
-  mode: TransportMode | 'walk'; // 'walk' pour les correspondances à pied
-  distanceMeters: number;
-  durationSeconds: number;  // Poids de l'arête (cost)
-}
-```
-
 ---
 
 ## 3. Gestion d'État Réactive avec Zustand
 
 Le store global est défini dans [`src/store/useTransportStore.ts`](./src/store/useTransportStore.ts).  
 Contrairement à `useState` local ou `useContext` qui peut provoquer des re-renders inutiles, Zustand permet d'isoler les actions et de manipuler les dictionnaires de données (`Record<string, ...>`) en temps constant $O(1)$.
-
-### Exemple de Structure du Store :
-```typescript
-interface TransportStoreState {
-  // Dictionnaires de données indexés par ID
-  stops: Record<string, StopNode>;
-  waypoints: Record<string, WaypointNode>;
-  lines: Record<string, TransportLine>;
-
-  // États d'interaction
-  activeTool: 'select' | 'add_stop' | 'draw_line';
-  activeLineId: string | null;
-  selectedElement: { type: 'stop' | 'line' | 'waypoint'; id: string } | null;
-  editingStopId: string | null;      // ID de l'arrêt actuellement en édition in-place
-  showStationLabels: boolean;        // Masquage global des étiquettes
-
-  // Actions
-  addStop: (coords: Coordinates, customName?: string) => string;
-  updateStop: (id: string, updates: Partial<StopNode>) => void;
-  deleteStop: (id: string) => void;
-  createLine: (params: { name: string; shortName: string; color: string; mode: TransportMode }) => string;
-  appendStopToLine: (lineId: string, stopId: string) => void;
-  createAndAppendWaypoint: (lineId: string, coords: Coordinates) => string;
-  toggleLineVisibility: (lineId: string) => void;
-  toggleShowStationLabels: () => void;
-  loadSampleData: () => void;
-  clearAll: () => void;
-}
-```
-
-### Logique d'Insertion et de Connexion :
-* **Ajout d'un arrêt (`addStop`) :** Crée un nouvel arrêt avec un nom automatique (`Arrêt N`), l'ajoute au dictionnaire et active automatiquement `editingStopId` pour ouvrir le popover d'édition.
-* **Ajout d'un arrêt à une ligne (`appendStopToLine`) :**
-  ```typescript
-  appendStopToLine: (lineId, stopId) => {
-    set((state) => {
-      const line = state.lines[lineId];
-      const stop = state.stops[stopId];
-      if (!line || !stop) return state;
-
-      // Évite les doublons consécutifs
-      if (line.pathNodeIds[line.pathNodeIds.length - 1] === stopId) return state;
-
-      const updatedPath = [...line.pathNodeIds, stopId];
-      const updatedLinesServed = stop.linesServed.includes(lineId)
-        ? stop.linesServed
-        : [...stop.linesServed, lineId];
-
-      return {
-        lines: { ...state.lines, [lineId]: { ...line, pathNodeIds: updatedPath } },
-        stops: {
-          ...state.stops,
-          [stopId]: {
-            ...stop,
-            linesServed: updatedLinesServed,
-            isTransfer: updatedLinesServed.length > 1, // Devient automatiquement pôle de correspondance
-          },
-        },
-      };
-    });
-  }
-  ```
 
 ---
 
@@ -197,7 +130,7 @@ Le composant principal de la carte est [`src/components/MapView.tsx`](./src/comp
 ├─────────────────────────┼───────────────────────────────────┤
 │    CALQUE SVG (Milieu)  │ Tracé vectoriel des lignes        │
 ├─────────────────────────┼───────────────────────────────────┤
-│    MARQUEURS DOM (Haut) │ Pastilles et étiquettes stations  │
+│    POINTS NOIRS (Haut)  │ Stations au-dessus des lignes     │
 ├─────────────────────────┼───────────────────────────────────┤
 │    POPOVER IN-PLACE     │ Bulle d'édition directe           │
 └─────────────────────────┴───────────────────────────────────┘
@@ -210,121 +143,67 @@ Dans [`src/constants/basemaps.ts`](./src/constants/basemaps.ts), 4 fonds de cart
 * **Mode Sombre (CartoDB Dark Matter)**
 * **Mode Clair Épuré (CartoDB Positron)**
 
----
+### B. Stations en Points Noirs Purs & Calque au-dessus des Lignes
+Les stations sont rendues dans un calque interactif dédié `.map-stations-overlay` avec `z-index: 10`, placé **strictement au-dessus des lignes SVG** (`z-index: 5`).  
+Chaque station est représentée par un point noir épuré avec contour blanc net et infobulle apparaissant au survol.
 
-### B. Le Problème d'Ancrage des Marqueurs et la Solution Géométrique $0\times0$ px
-
-#### 🔍 L'Anomalie initiale :
-Quand un arrêt était placé, il apparaissait décalé par rapport au clic et glissait lors du zoom/dézoom.
-* **Cause :** MapLibre calculait le centre d'ancrage en mesurant la boîte englobante de l'élément HTML (`offsetWidth` / `offsetHeight`). Comme notre élément contenait la pastille ronde ET le texte de l'étiquette en dessous, le centre géométrique tombait entre la pastille et le texte !
-
-#### ✅ La Solution Implémentée :
-1. Le conteneur racine du marqueur (`.map-station-marker`) a une taille stricte de **$0\times0\text{ px}$** (il s'agit d'un point géométrique pur).
-2. La pastille ronde de $20\times20\text{ px}$ est positionnée en `top: -10px; left: -10px;` : son centre coïncide à $100\%$ avec le point $(0,0)$.
-3. L'étiquette de texte est positionnée en `top: 14px; left: 0; transform: translateX(-50%);` : elle flotte sous le point sans modifier l'ancrage.
-
-```css
-/* src/App.css */
-.map-station-marker {
-  position: absolute;
-  width: 0;
-  height: 0;
-  pointer-events: auto !important;
-  z-index: 10;
-}
-
-.station-pin-circle {
-  position: absolute;
-  top: -10px;
-  left: -10px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-  cursor: pointer;
-}
-```
+### C. Rendu en Parallèle des Tronçons Communs (`transitGeometry.ts`)
+Lorsque deux ou plusieurs lignes partagent une même section (mêmes arrêts ou waypoints adjacents) :
+* Le module [`src/utils/transitGeometry.ts`](./src/utils/transitGeometry.ts) indexe chaque arête commune et calcule la normale perpendiculaire unitaire $\vec{n} = \left(-\frac{\Delta y}{L}, \frac{\Delta x}{L}\right)$.
+* Chaque ligne $k$ parmi les $N$ lignes partageant ce tronçon est décalée d'un offset parallèle proportionnel :
+  $$\text{shift} = \left(k - \frac{N - 1}{2}\right) \times 6\text{px}$$
+* Les lignes cheminent ainsi **côte à côte en parallèle** de manière parfaitement fluide et sans aucun chevauchement.
 
 ---
 
-### C. Le Calque Vectoriel SVG à Projection Directe (`map.project()`)
+## 5. Moteur Géodésique & Thermomètre de Ligne
 
-#### 🔍 Pourquoi avoir choisi un calque SVG plutôt que les calques WebGL natifs ?
-MapLibre réinitialise ses calques WebGL personnalisés lors du rechargement des tuiles raster ou lors d'un changement de fond de carte (`map.setStyle()`). Cela provoquait des disparitions de lignes intempestives.
+Le module [`src/utils/geo.ts`](./src/utils/geo.ts) gère tous les calculs géométriques côté front-end sans nécessiter de serveur backend.
 
-#### ✅ Le Fonctionnement du Calque SVG :
-1. Un élément `<svg className="map-routes-svg-overlay">` recouvre la carte avec `pointer-events: none`.
-2. Pour chaque ligne active, la fonction `map.project([lng, lat])` convertit les coordonnées GPS en pixels $(x, y)$ sur l'écran.
-3. Un chemin SVG `<path d="M x1 y1 L x2 y2 ...">` est tracé en temps réel :
-   * Une **sous-couche noire de contraste** (`stroke-width: 8px`).
-   * Le **tracé coloré de la ligne** (`stroke-width: 5px`).
-4. Les événements `map.on('move')`, `map.on('zoom')` et `map.on('resize')` déclenchent la réévaluation immédiate des coordonnées à **60 images par seconde**.
+### A. Calcul des Distances Réelles (Haversine)
+Pour deux points de coordonnées GPS $(lat_1, lng_1)$ et $(lat_2, lng_2)$ :
+$$\Delta\text{lat} = \text{lat}_2 - \text{lat}_1, \quad \Delta\text{lng} = \text{lng}_2 - \text{lng}_1$$
+$$a = \sin^2\left(\frac{\Delta\text{lat}}{2}\right) + \cos(\text{lat}_1)\cos(\text{lat}_2)\sin^2\left(\frac{\Delta\text{lng}}{2}\right)$$
+$$d = 2 R \cdot \text{atan2}\left(\sqrt{a}, \sqrt{1-a}\right)$$
 
-```typescript
-// Extrait de MapView.tsx
-const renderedLines = Object.values(lines)
-  .filter((line) => line.isActive !== false)
-  .map((line) => {
-    const points: { x: number; y: number }[] = [];
+Entre deux stations adjacentes dans une ligne, la distance affichée est la somme exacte de tous les segments géométriques (y compris les virages/waypoints intermédiaires).
 
-    line.pathNodeIds.forEach((nodeId) => {
-      const node = stops[nodeId] || waypoints[nodeId];
-      if (node) {
-        // Projection mathématique géographique -> pixels écran
-        const projected = map.project([node.coordinates.lng, node.coordinates.lat]);
-        points.push(projected);
-      }
-    });
+### B. Le Thermomètre de Ligne Interactif
+Le composant [`src/components/Sidebar/LineThermometer.tsx`](./src/components/Sidebar/LineThermometer.tsx) affiche :
+* **Indicateurs KPI de ligne :** Longueur totale ($km$), nombre d'arrêts, durée de trajet estimée, distance inter-station moyenne.
+* **Schéma linéaire vertical :** Ligne colorée aux couleurs de la ligne, pastilles de départ/terminus, distances inter-arrêts avec badge virages, temps de parcours cumulé et correspondances.
+* **Édition des paramètres :** Modification directe du nom, code court, couleur, mode de transport, vitesse moyenne et fréquence.
 
-    if (points.length < 2) return null;
-
-    const pathData = `M ${points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')}`;
-
-    return (
-      <g key={line.id} className="svg-transit-line-group">
-        <path d={pathData} stroke="#000000" strokeWidth={8} strokeOpacity={0.85} fill="none" strokeLinecap="round" />
-        <path d={pathData} stroke={line.color} strokeWidth={5} fill="none" strokeLinecap="round" />
-      </g>
-    );
-  });
-```
+### C. Tracé Bidirectionnel & Extension en Tête de Ligne (Prepend)
+L'application permet d'étendre les lignes dans les deux sens :
+1. **Prolongement au Départ (`prependStopToLine` / `createAndPrependWaypoint`) :**  
+   Bouton **`+ Prolonger avant le départ...`** en haut du thermomètre ou bascule `[◀ Départ]` dans la barre d'outils. Les nouveaux clics sur la carte ou sur les stations s'insèrent en amont (index 0).
+2. **Prolongement au Terminus (`appendStopToLine` / `createAndAppendWaypoint`) :**  
+   Bouton **`+ Prolonger après le terminus...`** en bas du thermomètre ou bascule `[Terminus ▶]`.
+3. **Inversion Complète du Tracé (`reverseLinePath`) :**  
+   Bouton ($\text{🔄}$) permettant d'inverser instantanément la direction de la ligne (le Départ devient le Terminus et vice-versa).
 
 ---
 
-## 5. Interface Utilisateur & Ergonomie
+## 6. Interface Utilisateur & Ergonomie
 
 ### A. Disposition Split-Screen (50% Menu / 50% Carte)
 Dans [`src/App.tsx`](./src/App.tsx) et [`src/App.css`](./src/App.css) :
 * **Panneau de gauche (50%) :**
   1. **Header :** Titre de l'application et badge.
-  2. **Toolbar :** Sélectionner, Poser un arrêt, Tracer une ligne, Démo, Vider, et bascule Noms ON/OFF.
-  3. **Sidebar de Gestion :** Onglets Lignes et Arrêts, formulaire de création de ligne avec palette de couleurs, inspecteur de sélection.
-  4. **Pied de panneau :** Sélecteur de fond de carte (*Plan OSM, Satellite, Sombre, Clair*).
+  2. **Toolbar :** Sélectionner, Poser un arrêt, Tracer une ligne, Démo, Vider, et bascule Noms ON/OFF (organisée sur 2 rangées anti-débordement).
+  3. **Sidebar de Gestion :** Onglets Lignes (avec Thermomètre détaillé) et Arrêts.
+  4. **Pied de panneau :** Sélecteur de fond de carte.
 * **Carte (50% Droite) :** Vue cartographique complète sans boutons flottants parasites.
 
----
-
-### B. Fenêtre d'Édition In-Place sur l'Arrêt
-Lorsqu'un arrêt est posé ou cliqué, un popover compact s'ancre directement au-dessus du marqueur avec `map.project(stop.coordinates)` :
-* Champ de texte pré-sélectionné (saisie du nom immédiate + validation par touche **Entrée**).
-* Bouton bascule **Correspondance**.
-* Bouton **Supprimer** l'arrêt.
+### B. Changement Rapide de Couleur de Ligne (1 Clic)
+* **Dans la liste des lignes :** Clic direct sur le badge coloré de la ligne.
+* **Dans le Thermomètre de ligne :** Barre de pastilles rapides (8 teintes standard + sélecteur couleur libre) et badge Hero interactif.
+* **Dans les paramètres :** Palette avec aperçu en temps réel.
 
 ---
 
-### C. Contrôles de Visibilité (Étiquettes & Lignes)
-1. **Masquage global des étiquettes de station :**  
-   Bouton **`Noms ON / Noms OFF`** dans la Toolbar et dans l'onglet Arrêts.
-2. **Masquage individuel par ligne :**  
-   Bouton œil ($\text{👁️}$ / $\text{🚫}$) sur chaque carte de ligne pour afficher ou cacher n'importe quelle ligne indépendamment.
-
----
-
-## 6. Arborescence Complète du Projet
+## 7. Arborescence Complète du Projet
 
 ```
 PublicTransportBuilder/
@@ -335,14 +214,18 @@ PublicTransportBuilder/
 │   │   └── basemaps.ts              # Catalogues des 4 fonds de carte (OSM, Satellite, Dark, Positron)
 │   ├── store/
 │   │   └── useTransportStore.ts     # Store Zustand réactif (État global & Actions du réseau)
+│   ├── utils/
+│   │   ├── geo.ts                   # Calculs géodésiques (Haversine, métriques de ligne, distances)
+│   │   └── transitGeometry.ts       # Moteur de tracé parallèle pour tronçons partagés
 │   ├── components/
-│   │   ├── MapView.tsx              # Composant Carte (MapLibre + Calque SVG + Marqueurs DOM + Popover)
+│   │   ├── MapView.tsx              # Carte (MapLibre + Calque SVG + Points Noirs interactifs + Popover)
 │   │   ├── Toolbar.tsx              # Barre d'outils (Outils de tracé, Démo, Vider, Toggle Noms)
 │   │   ├── BasemapSelector.tsx      # Sélecteur des 4 fonds de carte
 │   │   └── Sidebar/
-│   │       └── NetworkSidebar.tsx   # Gestionnaire des Lignes et Arrêts + Inspecteur
+│   │       ├── NetworkSidebar.tsx   # Gestionnaire Lignes/Arrêts avec onglets
+│   │       └── LineThermometer.tsx  # Thermomètre de Ligne & Schéma linéaire interactif avec distances
 │   ├── App.tsx                      # Layout principal Split-Screen 50/50
-│   ├── App.css                      # Design system, Glassmorphism, Popover et Thème Sombre
+│   ├── App.css                      # Design system, Glassmorphism, Thermomètre et Thème Sombre
 │   ├── index.css                    # Variables CSS globales et imports MapLibre
 │   └── main.tsx                     # Point d'entrée React 19
 ├── DOCUMENTATION_PROJET.md          # Le présent document récapitulatif
@@ -352,9 +235,7 @@ PublicTransportBuilder/
 
 ---
 
-## 7. Feuille de Route pour la Prochaine Étape (Calcul d'Itinéraire)
-
-Maintenant que le front-end et l'éditeur visuel sont entièrement fonctionnels et stables, voici les étapes suivantes prévues :
+## 8. Feuille de Route pour la Prochaine Étape (Calcul d'Itinéraire)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -369,14 +250,3 @@ Maintenant que le front-end et l'éditeur visuel sont entièrement fonctionnels 
   - Algorithme de Dijkstra           - Stockage Cypher
   - Calcul d'Itinéraire Local        - API REST / GraphQL
 ```
-
-### Prochaine Étape (Étape 4) :
-1. **Génération automatique du Property Graph en mémoire :**
-   * Transformation des `lines` et `stops` en liste d'arêtes pondérées (`TransportEdge`).
-   * Calcul des temps de parcours par tronçon :  
-     $$\text{Durée (s)} = \frac{\text{Distance (m)}}{\text{Vitesse Moyenne (m/s)}} + \text{Temps d'arrêt}$$
-   * Création des arêtes piétonnes de correspondance entre les lignes passant par une même station.
-2. **Module de Recherche d'Itinéraire :**
-   * Sélection d'une station de Départ et d'Arrivée.
-   * Exécution de l'algorithme de **Dijkstra** pour trouver le chemin le plus rapide.
-   * Mise en surbrillance de l'itinéraire calculé sur la carte avec feuille de route étape par étape.

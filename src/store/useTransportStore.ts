@@ -21,12 +21,14 @@ interface TransportStoreState {
 
   activeTool: ToolType;
   activeLineId: string | null;
+  drawingEnd: 'start' | 'end'; // 'start' = prolonger en tête (Départ), 'end' = prolonger en fin (Terminus)
   selectedElement: SelectedElement | null;
   editingStopId: string | null;
   showStationLabels: boolean;
 
   setActiveTool: (tool: ToolType) => void;
   setActiveLineId: (lineId: string | null) => void;
+  setDrawingEnd: (end: 'start' | 'end') => void;
   setSelectedElement: (element: SelectedElement | null) => void;
   setEditingStopId: (id: string | null) => void;
   toggleShowStationLabels: () => void;
@@ -46,8 +48,12 @@ interface TransportStoreState {
   deleteLine: (id: string) => void;
 
   appendStopToLine: (lineId: string, stopId: string) => void;
+  prependStopToLine: (lineId: string, stopId: string) => void;
+  insertStopInLine: (lineId: string, stopId: string, atIndex: number) => void;
   createAndAppendWaypoint: (lineId: string, coords: Coordinates) => string;
+  createAndPrependWaypoint: (lineId: string, coords: Coordinates) => string;
   removeNodeFromLine: (lineId: string, nodeIndex: number) => void;
+  reverseLinePath: (lineId: string) => void;
 
   loadSampleData: () => void;
   clearAll: () => void;
@@ -62,6 +68,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
   lines: {},
   activeTool: 'select',
   activeLineId: null,
+  drawingEnd: 'end',
   selectedElement: null,
   editingStopId: null,
   showStationLabels: true,
@@ -69,6 +76,8 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
   setActiveTool: (tool) => set({ activeTool: tool }),
 
   setActiveLineId: (lineId) => set({ activeLineId: lineId }),
+
+  setDrawingEnd: (end) => set({ drawingEnd: end }),
 
   setSelectedElement: (element) =>
     set({
@@ -138,18 +147,18 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       delete newStops[id];
 
       const newLines = { ...state.lines };
-      Object.keys(newLines).forEach((lineKey) => {
-        newLines[lineKey] = {
-          ...newLines[lineKey],
-          pathNodeIds: newLines[lineKey].pathNodeIds.filter((nodeId) => nodeId !== id),
+      Object.keys(newLines).forEach((lineId) => {
+        newLines[lineId] = {
+          ...newLines[lineId],
+          pathNodeIds: newLines[lineId].pathNodeIds.filter((nodeId) => nodeId !== id),
         };
       });
 
       return {
         stops: newStops,
         lines: newLines,
-        selectedElement: state.selectedElement?.id === id ? null : state.selectedElement,
         editingStopId: state.editingStopId === id ? null : state.editingStopId,
+        selectedElement: state.selectedElement?.id === id ? null : state.selectedElement,
       };
     });
   },
@@ -163,16 +172,17 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       color,
       mode,
       isActive: true,
-      averageSpeedKmh: mode === 'metro' ? 35 : mode === 'train' ? 60 : mode === 'tram' ? 22 : 18,
-      frequencyMinutes: 6,
+      averageSpeedKmh: mode === 'metro' ? 30 : mode === 'tram' ? 22 : mode === 'train' ? 60 : 18,
+      frequencyMinutes: mode === 'metro' ? 4 : 6,
       pathNodeIds: [],
     };
 
     set((state) => ({
       lines: { ...state.lines, [id]: newLine },
       activeLineId: id,
-      selectedElement: { type: 'line', id },
       activeTool: 'draw_line',
+      drawingEnd: 'end',
+      selectedElement: { type: 'line', id },
     }));
 
     return id;
@@ -221,6 +231,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     });
   },
 
+  // Ajouter un arrêt à la fin de la ligne (Terminus / Aval)
   appendStopToLine: (lineId, stopId) => {
     set((state) => {
       const line = state.lines[lineId];
@@ -231,6 +242,68 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       if (lastNodeId === stopId) return state;
 
       const updatedPath = [...line.pathNodeIds, stopId];
+      const updatedLinesServed = stop.linesServed.includes(lineId)
+        ? stop.linesServed
+        : [...stop.linesServed, lineId];
+
+      return {
+        lines: {
+          ...state.lines,
+          [lineId]: { ...line, pathNodeIds: updatedPath },
+        },
+        stops: {
+          ...state.stops,
+          [stopId]: {
+            ...stop,
+            linesServed: updatedLinesServed,
+            isTransfer: updatedLinesServed.length > 1,
+          },
+        },
+      };
+    });
+  },
+
+  // Ajouter un arrêt au début de la ligne (Départ / Amont / Tête de ligne)
+  prependStopToLine: (lineId, stopId) => {
+    set((state) => {
+      const line = state.lines[lineId];
+      const stop = state.stops[stopId];
+      if (!line || !stop) return state;
+
+      const firstNodeId = line.pathNodeIds[0];
+      if (firstNodeId === stopId) return state;
+
+      const updatedPath = [stopId, ...line.pathNodeIds];
+      const updatedLinesServed = stop.linesServed.includes(lineId)
+        ? stop.linesServed
+        : [...stop.linesServed, lineId];
+
+      return {
+        lines: {
+          ...state.lines,
+          [lineId]: { ...line, pathNodeIds: updatedPath },
+        },
+        stops: {
+          ...state.stops,
+          [stopId]: {
+            ...stop,
+            linesServed: updatedLinesServed,
+            isTransfer: updatedLinesServed.length > 1,
+          },
+        },
+      };
+    });
+  },
+
+  // Insérer un arrêt à un index spécifique
+  insertStopInLine: (lineId, stopId, atIndex) => {
+    set((state) => {
+      const line = state.lines[lineId];
+      const stop = state.stops[stopId];
+      if (!line || !stop) return state;
+
+      const updatedPath = [...line.pathNodeIds];
+      updatedPath.splice(atIndex, 0, stopId);
 
       const updatedLinesServed = stop.linesServed.includes(lineId)
         ? stop.linesServed
@@ -253,6 +326,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     });
   },
 
+  // Créer un point de virage à la fin de la ligne
   createAndAppendWaypoint: (lineId, coords) => {
     const line = get().lines[lineId];
     if (!line) return '';
@@ -288,6 +362,41 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     return wpId;
   },
 
+  // Créer un point de virage au début de la ligne (en tête)
+  createAndPrependWaypoint: (lineId, coords) => {
+    const line = get().lines[lineId];
+    if (!line) return '';
+
+    const wpId = generateId('wp');
+
+    const newWaypoint: WaypointNode = {
+      id: wpId,
+      type: 'waypoint',
+      coordinates: coords,
+      lineId,
+      order: 0,
+      createdAt: Date.now(),
+    };
+
+    set((state) => {
+      const targetLine = state.lines[lineId];
+      if (!targetLine) return state;
+
+      return {
+        waypoints: { ...state.waypoints, [wpId]: newWaypoint },
+        lines: {
+          ...state.lines,
+          [lineId]: {
+            ...targetLine,
+            pathNodeIds: [wpId, ...targetLine.pathNodeIds],
+          },
+        },
+      };
+    });
+
+    return wpId;
+  },
+
   removeNodeFromLine: (lineId, nodeIndex) => {
     set((state) => {
       const line = state.lines[lineId];
@@ -311,9 +420,27 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     });
   },
 
+  // Inverser l'ordre du tracé de la ligne (Départ ↔ Terminus)
+  reverseLinePath: (lineId) => {
+    set((state) => {
+      const line = state.lines[lineId];
+      if (!line) return state;
+
+      return {
+        lines: {
+          ...state.lines,
+          [lineId]: {
+            ...line,
+            pathNodeIds: [...line.pathNodeIds].reverse(),
+          },
+        },
+      };
+    });
+  },
+
   loadSampleData: () => {
     const s1: StopNode = { id: 'stop_1', type: 'stop', name: 'Gare Centrale', code: 'GC-01', coordinates: { lng: 2.3522, lat: 48.8566 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 120, createdAt: 1 };
-    const s2: StopNode = { id: 'stop_2', type: 'stop', name: 'Place de la République', code: 'REP', coordinates: { lng: 2.3634, lat: 48.8675 }, isTransfer: true, linesServed: ['line_t1'], transferDurationSec: 90, createdAt: 2 };
+    const s2: StopNode = { id: 'stop_2', type: 'stop', name: 'Place de la République', code: 'REP', coordinates: { lng: 2.3634, lat: 48.8675 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 90, createdAt: 2 };
     const s3: StopNode = { id: 'stop_3', type: 'stop', name: 'Parc des Expositions', code: 'PEX', coordinates: { lng: 2.3850, lat: 48.8750 }, isTransfer: false, linesServed: ['line_t1'], transferDurationSec: 60, createdAt: 3 };
     const s4: StopNode = { id: 'stop_4', type: 'stop', name: 'Université Campus', code: 'UNI', coordinates: { lng: 2.3488, lat: 48.8462 }, isTransfer: false, linesServed: ['line_b2'], transferDurationSec: 60, createdAt: 4 };
 
@@ -340,7 +467,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       isActive: true,
       averageSpeedKmh: 18,
       frequencyMinutes: 8,
-      pathNodeIds: ['stop_1', 'stop_4'],
+      pathNodeIds: ['stop_4', 'stop_1', 'wp_1', 'stop_2'],
     };
 
     set({
@@ -349,6 +476,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       lines: { line_t1: lineT1, line_b2: lineB2 },
       activeTool: 'select',
       activeLineId: 'line_t1',
+      drawingEnd: 'end',
       selectedElement: null,
       editingStopId: null,
       showStationLabels: true,
@@ -362,6 +490,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       lines: {},
       activeTool: 'select',
       activeLineId: null,
+      drawingEnd: 'end',
       selectedElement: null,
       editingStopId: null,
       showStationLabels: true,

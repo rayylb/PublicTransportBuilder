@@ -1,7 +1,6 @@
-import React, { useEffect, useRef, useState, useReducer, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Map as MapLibreMap,
-  Marker as MapLibreMarker,
   NavigationControl,
   FullscreenControl,
   ScaleControl,
@@ -10,6 +9,7 @@ import {
 import { getBasemapStyle } from '../constants/basemaps';
 import { useTransportStore } from '../store/useTransportStore';
 import type { BasemapId, Coordinates } from '../types/transport';
+import { computeParallelTransitLines } from '../utils/transitGeometry';
 import { Crosshair, ZoomIn, Check, X, Trash2, ArrowRightLeft } from 'lucide-react';
 
 interface MapViewProps {
@@ -24,14 +24,12 @@ export const MapView: React.FC<MapViewProps> = ({
   initialZoom = 12,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapInstanceRef = useRef<MapLibreMap | null>(null);
-  const markersRef = useRef<Map<string, MapLibreMarker>>(new Map());
-
-  // Force le rafraîchissement réactif du calque vectoriel SVG et du popover lors des mouvements de carte
-  const [, forceMapUpdate] = useReducer((x) => x + 1, 0);
+  const [map, setMap] = useState<MapLibreMap | null>(null);
+  const [, setMapRenderTick] = useState(0);
 
   const [cursorCoords, setCursorCoords] = useState<Coordinates | null>(null);
   const [currentZoom, setCurrentZoom] = useState<number>(initialZoom);
+  const [hoveredStopId, setHoveredStopId] = useState<string | null>(null);
 
   // Store Zustand
   const {
@@ -40,6 +38,7 @@ export const MapView: React.FC<MapViewProps> = ({
     lines,
     activeTool,
     activeLineId,
+    drawingEnd,
     selectedElement,
     editingStopId,
     showStationLabels,
@@ -47,104 +46,21 @@ export const MapView: React.FC<MapViewProps> = ({
     updateStop,
     deleteStop,
     createAndAppendWaypoint,
+    createAndPrependWaypoint,
+    appendStopToLine,
+    prependStopToLine,
     setSelectedElement,
     setEditingStopId,
   } = useTransportStore();
 
-  // État local pour le nom de l'arrêt en cours d'édition dans le popover
   const [tempStopName, setTempStopName] = useState('');
   const stopInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Synchroniser le nom temporaire quand l'arrêt à éditer change
-  useEffect(() => {
-    if (editingStopId && stops[editingStopId]) {
-      setTempStopName(stops[editingStopId].name);
-      setTimeout(() => {
-        stopInputRef.current?.focus();
-        stopInputRef.current?.select();
-      }, 50);
-    }
-  }, [editingStopId, stops]);
-
-  // Synchronisation des Marqueurs DOM pour les Arrêts (Stations)
-  const syncStopMarkers = useCallback(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    const currentMarkers = markersRef.current;
-    const currentStopIds = new Set(Object.keys(stops));
-
-    // Supprimer les marqueurs d'arrêts supprimés
-    for (const [id, marker] of currentMarkers.entries()) {
-      if (!currentStopIds.has(id)) {
-        marker.remove();
-        currentMarkers.delete(id);
-      }
-    }
-
-    // Créer ou actualiser chaque station
-    for (const stop of Object.values(stops)) {
-      const isSelected = selectedElement?.type === 'stop' && selectedElement.id === stop.id;
-      const isTransfer = stop.isTransfer || stop.linesServed.length > 1;
-
-      let marker = currentMarkers.get(stop.id);
-
-      if (!marker) {
-        const el = document.createElement('div');
-        el.className = 'map-station-marker';
-        el.innerHTML = `
-          <div class="station-pin-circle ${isTransfer ? 'transfer' : 'standard'} ${isSelected ? 'selected' : ''}">
-            <div class="station-inner-dot"></div>
-          </div>
-          <div class="station-pin-label ${!showStationLabels && !isSelected ? 'hidden-label' : ''}">${stop.name}</div>
-        `;
-
-        el.onclick = (e) => {
-          e.stopPropagation();
-          const state = useTransportStore.getState();
-          if (state.activeTool === 'draw_line' && state.activeLineId) {
-            state.appendStopToLine(state.activeLineId, stop.id);
-          } else {
-            state.setSelectedElement({ type: 'stop', id: stop.id });
-            state.setEditingStopId(stop.id);
-          }
-        };
-
-        marker = new MapLibreMarker({ element: el })
-          .setLngLat([stop.coordinates.lng, stop.coordinates.lat])
-          .addTo(map);
-
-        currentMarkers.set(stop.id, marker);
-      } else {
-        // Mise à jour de la position GPS exacte
-        marker.setLngLat([stop.coordinates.lng, stop.coordinates.lat]);
-
-        // Mise à jour des classes et texte
-        const el = marker.getElement();
-        const circleEl = el.querySelector('.station-pin-circle');
-        if (circleEl) {
-          circleEl.className = `station-pin-circle ${isTransfer ? 'transfer' : 'standard'} ${isSelected ? 'selected' : ''}`;
-        }
-        const labelEl = el.querySelector('.station-pin-label');
-        if (labelEl) {
-          if (labelEl.textContent !== stop.name) {
-            labelEl.textContent = stop.name;
-          }
-          if (showStationLabels || isSelected) {
-            labelEl.classList.remove('hidden-label');
-          } else {
-            labelEl.classList.add('hidden-label');
-          }
-        }
-      }
-    }
-  }, [stops, selectedElement, showStationLabels]);
 
   // Initialisation de la carte MapLibre
   useEffect(() => {
     if (!mapContainerRef.current) return;
 
-    const map = new MapLibreMap({
+    const mapInstance = new MapLibreMap({
       container: mapContainerRef.current,
       style: getBasemapStyle(activeBasemap),
       center: initialCenter,
@@ -154,65 +70,68 @@ export const MapView: React.FC<MapViewProps> = ({
       attributionControl: false,
     });
 
-    mapInstanceRef.current = map;
+    mapInstance.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
+    mapInstance.addControl(new FullscreenControl(), 'top-right');
+    mapInstance.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-right');
 
-    map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
-    map.addControl(new FullscreenControl(), 'top-right');
-    map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-right');
-
-    map.on('mousemove', (e) => {
+    mapInstance.on('mousemove', (e) => {
       setCursorCoords({
         lng: Number(e.lngLat.lng.toFixed(5)),
         lat: Number(e.lngLat.lat.toFixed(5)),
       });
     });
 
-    // Mettre à jour l'affichage SVG en temps réel lors du déplacement / zoom
-    map.on('move', () => {
-      forceMapUpdate();
+    // Mettre à jour l'affichage SVG / Stations en temps réel lors du déplacement / zoom
+    mapInstance.on('move', () => {
+      setMapRenderTick((t) => t + 1);
     });
 
-    map.on('zoom', () => {
-      setCurrentZoom(Number(map.getZoom().toFixed(1)));
-      forceMapUpdate();
+    mapInstance.on('zoom', () => {
+      setCurrentZoom(Number(mapInstance.getZoom().toFixed(1)));
+      setMapRenderTick((t) => t + 1);
     });
 
-    map.on('resize', () => {
-      forceMapUpdate();
+    mapInstance.on('resize', () => {
+      setMapRenderTick((t) => t + 1);
     });
 
-    map.on('load', () => {
-      map.resize();
-      syncStopMarkers();
-      forceMapUpdate();
+    mapInstance.on('load', () => {
+      mapInstance.resize();
+      setMap(mapInstance);
+      setMapRenderTick((t) => t + 1);
     });
 
     return () => {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current.clear();
-      map.remove();
-      mapInstanceRef.current = null;
+      mapInstance.remove();
+      setMap(null);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Focus automatique du champ texte lors de l'ouverture du popover
+  useEffect(() => {
+    if (editingStopId && stops[editingStopId]) {
+      const stop = stops[editingStopId];
+      setTempStopName(stop.name);
+      const timer = setTimeout(() => {
+        stopInputRef.current?.focus();
+        stopInputRef.current?.select();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [editingStopId, stops]);
 
   // Changement réactif du fond de carte
   useEffect(() => {
-    const map = mapInstanceRef.current;
     if (map) {
       map.setStyle(getBasemapStyle(activeBasemap));
     }
-  }, [activeBasemap]);
-
-  // Synchronisation des marqueurs quand le store change
-  useEffect(() => {
-    syncStopMarkers();
-    forceMapUpdate();
-  }, [stops, waypoints, lines, selectedElement, activeLineId, showStationLabels, syncStopMarkers]);
+  }, [map, activeBasemap]);
 
   // Redimensionnement automatique de la carte
   useEffect(() => {
     const handleResize = () => {
-      mapInstanceRef.current?.resize();
+      map?.resize();
     };
     window.addEventListener('resize', handleResize);
     const timeout = setTimeout(handleResize, 100);
@@ -220,11 +139,10 @@ export const MapView: React.FC<MapViewProps> = ({
       window.removeEventListener('resize', handleResize);
       clearTimeout(timeout);
     };
-  }, []);
+  }, [map]);
 
   // Clic sur la carte pour poser un arrêt ou un waypoint
   useEffect(() => {
-    const map = mapInstanceRef.current;
     if (!map) return;
 
     if (activeTool === 'add_stop') {
@@ -249,7 +167,11 @@ export const MapView: React.FC<MapViewProps> = ({
           alert('Veuillez d\'abord sélectionner ou créer une ligne dans le panneau de gauche.');
           return;
         }
-        createAndAppendWaypoint(activeLineId, coords);
+        if (drawingEnd === 'start') {
+          createAndPrependWaypoint(activeLineId, coords);
+        } else {
+          createAndAppendWaypoint(activeLineId, coords);
+        }
       } else if (activeTool === 'select') {
         setSelectedElement(null);
         setEditingStopId(null);
@@ -262,10 +184,13 @@ export const MapView: React.FC<MapViewProps> = ({
       map.off('click', handleMapClick);
     };
   }, [
+    map,
     activeTool,
     activeLineId,
+    drawingEnd,
     addStop,
     createAndAppendWaypoint,
+    createAndPrependWaypoint,
     setSelectedElement,
     setEditingStopId,
   ]);
@@ -288,75 +213,155 @@ export const MapView: React.FC<MapViewProps> = ({
     updateStop(editingStopId, { isTransfer: !current.isTransfer });
   };
 
-  // Calcul dynamique des tracés SVG pour chaque ligne de transport active
-  const map = mapInstanceRef.current;
+  // 1. Calcul dynamique des tracés SVG décalés en parallèle pour les tronçons communs
+  const parallelPaths = map
+    ? computeParallelTransitLines(lines, stops, waypoints, (coords) => map.project(coords))
+    : {};
 
-  const renderedLines = Object.values(lines)
-    .filter((line) => line.isActive !== false) // Afficher uniquement les lignes visibles
-    .map((line) => {
-      if (!map) return null;
+  const renderedLines = map
+    ? Object.values(lines)
+        .filter((line) => line.isActive !== false && parallelPaths[line.id])
+        .sort((a, b) => {
+          const aSelected = selectedElement?.type === 'line' && selectedElement.id === a.id;
+          const bSelected = selectedElement?.type === 'line' && selectedElement.id === b.id;
+          const aActive = activeLineId === a.id;
+          const bActive = activeLineId === b.id;
+          if ((aSelected || aActive) && !(bSelected || bActive)) return 1;
+          if (!(aSelected || aActive) && (bSelected || bActive)) return -1;
+          return 0;
+        })
+        .map((line) => {
+          const pathData = parallelPaths[line.id];
+          if (!pathData) return null;
 
-      const points: { x: number; y: number }[] = [];
+          const isSelected = selectedElement?.type === 'line' && selectedElement.id === line.id;
+          const isActive = activeLineId === line.id;
 
-      line.pathNodeIds.forEach((nodeId) => {
-        const node = stops[nodeId] || waypoints[nodeId];
-        if (node) {
-          const projected = map.project([node.coordinates.lng, node.coordinates.lat]);
-          points.push(projected);
-        }
-      });
+          return (
+            <g
+              key={line.id}
+              className={`svg-transit-line-group ${isSelected || isActive ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedElement({ type: 'line', id: line.id });
+              }}
+              style={{ cursor: 'pointer' }}
+            >
+              {/* Zone de clic invisible élargie (24px) pour faciliter la sélection de ligne au clic sur la carte */}
+              <path
+                d={pathData}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={24}
+                pointerEvents="stroke"
+              />
+              {/* Lueur d'illumination si la ligne est active ou sélectionnée */}
+              {(isSelected || isActive) && (
+                <path
+                  d={pathData}
+                  fill="none"
+                  stroke={line.color || '#0ea5e9'}
+                  strokeWidth={13}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeOpacity={0.4}
+                  pointerEvents="none"
+                />
+              )}
+              {/* Sous-couche de contraste noir */}
+              <path
+                d={pathData}
+                fill="none"
+                stroke="#000000"
+                strokeWidth={isSelected || isActive ? 8.5 : 7}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeOpacity={0.85}
+                pointerEvents="none"
+              />
+              {/* Tracé coloré principal */}
+              <path
+                d={pathData}
+                fill="none"
+                stroke={line.color || '#0ea5e9'}
+                strokeWidth={isSelected || isActive ? 5.5 : 4.5}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                pointerEvents="none"
+              />
+            </g>
+          );
+        })
+    : null;
 
-      if (points.length < 2) return null;
+  // 2. Calcul dynamique des Waypoints (points de virage) en SVG
+  const renderedWaypoints = map
+    ? Object.values(waypoints)
+        .filter((wp) => !wp.lineId || lines[wp.lineId]?.isActive !== false)
+        .map((wp) => {
+          const p = map.project([wp.coordinates.lng, wp.coordinates.lat]);
 
-      const pathData = `M ${points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')}`;
-      const isSelected = selectedElement?.type === 'line' && selectedElement.id === line.id;
-      const isActive = activeLineId === line.id;
+          return (
+            <circle
+              key={wp.id}
+              cx={p.x}
+              cy={p.y}
+              r={4}
+              fill="#ffffff"
+              stroke="#0284c7"
+              strokeWidth={2}
+              className="svg-waypoint-dot"
+            />
+          );
+        })
+    : null;
 
-      return (
-        <g key={line.id} className="svg-transit-line-group">
-          {/* Sous-couche de contraste noir */}
-          <path
-            d={pathData}
-            fill="none"
-            stroke="#000000"
-            strokeWidth={isSelected || isActive ? 9 : 7}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeOpacity={0.85}
-          />
-          {/* Tracé coloré principal */}
-          <path
-            d={pathData}
-            fill="none"
-            stroke={line.color || '#0ea5e9'}
-            strokeWidth={isSelected || isActive ? 5.5 : 4.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </g>
-      );
-    });
+  // 3. Calcul dynamique des Arrêts (Stations) sous forme de simples points noirs AU-DESSUS des lignes
+  const renderedStops = map
+    ? Object.values(stops).map((stop) => {
+        const p = map.project([stop.coordinates.lng, stop.coordinates.lat]);
+        const isSelected = selectedElement?.type === 'stop' && selectedElement.id === stop.id;
+        const isEditing = editingStopId === stop.id;
+        const isHovered = hoveredStopId === stop.id;
+        const isTransfer = stop.isTransfer || stop.linesServed.length > 1;
+        const shouldShowLabel = showStationLabels || isHovered || isSelected || isEditing;
 
-  // Calcul dynamique des Waypoints (points de virage) en SVG pour les lignes visibles
-  const renderedWaypoints = Object.values(waypoints)
-    .filter((wp) => !wp.lineId || lines[wp.lineId]?.isActive !== false)
-    .map((wp) => {
-      if (!map) return null;
-      const p = map.project([wp.coordinates.lng, wp.coordinates.lat]);
+        return (
+          <div
+            key={stop.id}
+            className={`map-station-dot-wrapper ${isSelected ? 'selected' : ''} ${isTransfer ? 'transfer' : ''}`}
+            style={{
+              transform: `translate3d(${p.x}px, ${p.y}px, 0)`,
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (activeTool === 'draw_line' && activeLineId) {
+                if (drawingEnd === 'start') {
+                  prependStopToLine(activeLineId, stop.id);
+                } else {
+                  appendStopToLine(activeLineId, stop.id);
+                }
+              } else {
+                setSelectedElement({ type: 'stop', id: stop.id });
+                setEditingStopId(stop.id);
+              }
+            }}
+            onMouseEnter={() => setHoveredStopId(stop.id)}
+            onMouseLeave={() => setHoveredStopId(null)}
+          >
+            {/* Le point noir simple */}
+            <div className="station-black-dot" />
 
-      return (
-        <circle
-          key={wp.id}
-          cx={p.x}
-          cy={p.y}
-          r={4.5}
-          fill="#ffffff"
-          stroke="#0284c7"
-          strokeWidth={2}
-          className="svg-waypoint-dot"
-        />
-      );
-    });
+            {/* Le nom de la station (affiché au survol ou si l'affichage permanent est activé) */}
+            {shouldShowLabel && (
+              <div className={`station-name-tooltip ${isHovered ? 'hovered' : ''}`}>
+                {stop.name}
+              </div>
+            )}
+          </div>
+        );
+      })
+    : null;
 
   // Position du Popover d'édition au-dessus de l'arrêt sélectionné
   const activeEditingStop = editingStopId && stops[editingStopId] ? stops[editingStopId] : null;
@@ -366,16 +371,21 @@ export const MapView: React.FC<MapViewProps> = ({
 
   return (
     <div className="map-view-wrapper">
-      {/* Conteneur MapLibre WebGL (Fond de carte raster / satellite) */}
+      {/* 1. Conteneur MapLibre WebGL (Fond de carte raster / satellite) */}
       <div ref={mapContainerRef} className="map-gl-container" />
 
-      {/* Calque Vectoriel SVG Haute Performance pour les Lignes et Waypoints */}
+      {/* 2. Calque Vectoriel SVG Haute Performance pour les Lignes et Waypoints (sous les stations) */}
       <svg className="map-routes-svg-overlay">
         {renderedLines}
         {renderedWaypoints}
       </svg>
 
-      {/* POPUP D'ÉDITION IN-PLACE DIRECTEMENT SUR L'ARRÊT */}
+      {/* 3. Calque interactif des Stations : Points noirs simples positionnés AU-DESSUS des lignes */}
+      <div className="map-stations-overlay">
+        {renderedStops}
+      </div>
+
+      {/* 4. POPUP D'ÉDITION IN-PLACE DIRECTEMENT SUR L'ARRÊT */}
       {activeEditingStop && popupPixelPos && (
         <div
           className="inplace-stop-popup"
@@ -441,7 +451,7 @@ export const MapView: React.FC<MapViewProps> = ({
         </div>
       )}
 
-      {/* Barre d'état HUD */}
+      {/* 5. Barre d'état HUD */}
       <div className="map-hud-bar">
         <div className="hud-item">
           <Crosshair size={13} className="hud-icon" />
