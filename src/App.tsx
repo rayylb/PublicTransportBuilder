@@ -14,18 +14,17 @@ export function App() {
     <div className="app-split-container">
       {/* ================= PANNEAU DE GAUCHE (50% DE L'ÉCRAN) ================= */}
       <aside className="app-left-sidebar">
-        {/* En-tête de marque */}
+        {/* En-tête de marque sobre et épuré */}
         <header className="panel-header-section">
           <div className="app-brand">
             <div className="brand-icon-wrapper">
-              <Network size={20} />
+              <Network size={18} />
             </div>
             <div className="brand-text-block">
               <h1 className="brand-title">Public Transport Builder</h1>
-              <span className="brand-subtitle">Éditeur & Moteur de Graphes de Transport</span>
+              <span className="brand-subtitle">Éditeur de lignes & géométrie de réseau</span>
             </div>
           </div>
-          <span className="brand-badge">Étape 3</span>
         </header>
 
         {/* Barre d'outils et commandes de tracé */}

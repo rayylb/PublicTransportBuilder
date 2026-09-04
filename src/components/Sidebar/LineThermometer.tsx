@@ -155,12 +155,11 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
         </div>
       </div>
 
-      {/* 2. Hero Card stylisée avec lueur aux couleurs de la ligne */}
+      {/* 2. Hero Card stylisée */}
       <div
         className="line-hero-card"
         style={{
           borderLeftColor: line.color,
-          boxShadow: `0 8px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1)`,
         }}
       >
         <div className="line-hero-top">
@@ -168,7 +167,6 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
             className="line-hero-badge-glow"
             style={{
               backgroundColor: line.color,
-              boxShadow: `0 0 16px ${line.color}88`,
               cursor: 'pointer',
             }}
             title="Cliquer pour changer la couleur de la ligne"
@@ -466,7 +464,6 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
                         className="segment-rail-line"
                         style={{
                           backgroundColor: line.color,
-                          boxShadow: `0 0 8px ${line.color}66`,
                         }}
                       />
 
@@ -504,10 +501,10 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
                       borderLeftColor: isTerminusStart
                         ? '#10b981'
                         : isTerminusEnd
-                        ? '#ef4444'
-                        : isHovered
-                        ? line.color
-                        : 'var(--border-color)',
+                          ? '#ef4444'
+                          : isHovered
+                            ? line.color
+                            : 'var(--border-color)',
                     }}
                   >
                     {/* Puce visuelle de la station sur le rail */}
@@ -518,8 +515,8 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
                           borderColor: isTerminusStart
                             ? '#10b981'
                             : isTerminusEnd
-                            ? '#ef4444'
-                            : line.color,
+                              ? '#ef4444'
+                              : line.color,
                         }}
                       >
                         <div className="bullet-core-dot" />

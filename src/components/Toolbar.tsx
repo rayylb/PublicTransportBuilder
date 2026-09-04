@@ -54,15 +54,15 @@ export const Toolbar: React.FC = () => {
 
   return (
     <div className="toolbar-panel-wrapper">
-      {/* Ligne 1 : Outils de création et sélection */}
-      <div className="toolbar-row-main">
+      {/* Ligne 1 : Outils de création et sélection (Barre segmentée) */}
+      <div className="toolbar-segmented-bar">
         {tools.map((t) => {
           const isActive = activeTool === t.id;
           return (
             <button
               key={t.id}
               type="button"
-              className={`tool-action-btn ${isActive ? 'active' : ''}`}
+              className={`toolbar-segment-btn ${isActive ? 'active' : ''}`}
               onClick={() => setActiveTool(t.id)}
               title={t.tooltip}
             >
@@ -73,34 +73,34 @@ export const Toolbar: React.FC = () => {
         })}
       </div>
 
-      {/* Ligne 2 : Actions et Affichage (Noms, Démo, Vider) */}
-      <div className="toolbar-row-secondary">
+      {/* Ligne 2 : Actions et Affichage */}
+      <div className="toolbar-actions-row">
         {/* Bouton pour afficher/masquer le nom des stations */}
         <button
           type="button"
-          className={`tool-action-btn ${showStationLabels ? 'active-toggle' : 'muted'}`}
+          className={`toolbar-chip-btn ${showStationLabels ? 'active' : ''}`}
           onClick={toggleShowStationLabels}
-          title={showStationLabels ? 'Masquer les noms permanents des stations' : 'Afficher les noms permanents des stations'}
+          title={showStationLabels ? 'Masquer les noms des stations' : 'Afficher les noms des stations'}
         >
-          {showStationLabels ? <Tag size={14} /> : <EyeOff size={14} />}
-          <span>{showStationLabels ? 'Noms ON' : 'Noms OFF'}</span>
+          {showStationLabels ? <Tag size={13} /> : <EyeOff size={13} />}
+          <span>{showStationLabels ? 'Noms : Visibles' : 'Noms : Masqués'}</span>
         </button>
 
         {/* Bouton Démo */}
         <button
           type="button"
-          className="tool-action-btn secondary"
+          className="toolbar-chip-btn"
           onClick={loadSampleData}
           title="Charger le réseau exemple (Paris - Tram T1 & Bus B2)"
         >
-          <Sparkles size={14} />
-          <span>Démo</span>
+          <Sparkles size={13} />
+          <span>Exemple Paris</span>
         </button>
 
         {/* Bouton Vider */}
         <button
           type="button"
-          className="tool-action-btn danger"
+          className="toolbar-chip-btn danger"
           onClick={() => {
             if (window.confirm('Voulez-vous vraiment effacer tout le réseau ?')) {
               clearAll();
@@ -108,8 +108,8 @@ export const Toolbar: React.FC = () => {
           }}
           title="Effacer tout le réseau"
         >
-          <Trash2 size={14} />
-          <span>Vider</span>
+          <Trash2 size={13} />
+          <span>Effacer</span>
         </button>
       </div>
 
