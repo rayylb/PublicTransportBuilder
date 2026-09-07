@@ -50,64 +50,46 @@ L'application permet :
 
 ## 2. Modélisation des Données & Types TypeScript (Property Graph)
 
-Dans [`src/types/transport.ts`](./src/types/transport.ts), les données sont modélisées selon la théorie des graphes :
+Dans [`src/types/transport.ts`](./src/types/transport.ts), les données sont modélisées selon la théorie des **Graphes de Propriétés (Property Graph)** :
 
-### 1. Les Coordonnées Géographiques
-```typescript
-export interface Coordinates {
-  lng: number; // Longitude (axe X : standard GeoJSON)
-  lat: number; // Latitude (axe Y)
-}
+```
+                               ┌─────────────────┐
+                               │   Nœud LIGNE    │
+                               │   (Transport)   │
+                               └────────┬────────┘
+                                        │
+                      ┌─────────────────┴─────────────────┐
+                      │                                   │
+              Arête "TRACE"                       Arête "SUIVI"
+       (Affichage & Géométrie)              (Topologie Commerciale)
+                      │                                   │
+         ┌────────────┴────────────┐             ┌────────┴────────┐
+         ▼                         ▼             ▼                 ▼
+   Station / Waypoint ──TRACE──► Waypoint ──► Station A ──SUIVI──► Station B
+   (Tracé physique séquentiel)                (Liaison directe inter-stations)
 ```
 
-### 2. La Distinction entre Stations et Waypoints
-* **`StopNode` (Nœud Commercial) :** Représente une station où les passagers montent et descendent.
-* **`WaypointNode` (Nœud Géométrique) :** Représente une courbure de la voie/route sans arrêt commercial.
+### A. Les Nœuds du Graphe (Nodes)
+1. **`StationNode` / `StopNode` (Nœud Commercial) :** Représente une station où les passagers montent et descendent (`id`, `name`, `coordinates`, `isTransfer`, `linesServed`, `transferDurationSec`, `fareZone`, `isAccessiblePMR`).
+2. **`WaypointNode` (Nœud Géométrique) :** Représente une courbure de la voie/route sans arrêt commercial (`id`, `coordinates`, `lineId`, `order`).
+3. **`TransportLine` / `LineNode` (Nœud Ligne) :** Représente la ligne avec son mode/catégorie (`tram`, `metro`, `bus`, `train`, `cable_car`), sa vitesse moyenne (`averageSpeedKmh`), et ses propriétés d'exploitation :
+   - **Fréquences par tranche horaire :** `peakFrequencyMinutes` (Heures de pointe), `offPeakFrequencyMinutes` (Heures creuses), `nightFrequencyMinutes` (Soirée & nuit).
+   - **Amplitude horaire de service :** `firstDeparture` (ex: "05:30"), `lastDeparture` (ex: "01:00").
+   - **Sens & Accessibilité :** `isBidirectional` (Aller-Retour / Sens unique), `isAccessiblePMR` (Accessibilité handicapés/poussettes).
 
-```typescript
-export type NodeType = 'stop' | 'waypoint';
+### B. Les Arêtes du Graphe (Edges)
+1. **Arête `TRACE` (Rendu cartographique & Affichage)** :
+   - Relie deux nœuds consécutifs du tracé physique d'une ligne ($N_i \rightarrow N_{i+1}$ : Station $\leftrightarrow$ Waypoint, Waypoint $\leftrightarrow$ Waypoint, Waypoint $\leftrightarrow$ Station, Station $\leftrightarrow$ Station).
+   - Stocke : `lineId`, `sourceNodeId`, `targetNodeId`, `distanceMeters`, `distanceKm`, `orderIndex`.
+2. **Arête `SUIVI` (Exploitation commerciale & Calcul d'Itinéraire)** :
+   - Relie directement deux stations consécutives d'une ligne ($S_A \rightarrow S_B$) en intégrant la distance cumulée réelle avec virages.
+   - Stocke : `lineId`, `sourceStationId`, `targetStationId`, `direction` (`forward` ou `backward`), `distanceMeters`, `distanceKm`, `intermediateWaypointsCount`.
+   - *Note :* La durée de trajet n'est pas stockée statiquement : elle est calculée dynamiquement par le moteur à partir de la distance et de la vitesse commerciale de la ligne (`calculateTravelDurationSeconds`).
+3. **Arête `TRANSFER` (Correspondance)** :
+   - Relie deux stations pour modéliser une correspondance à pied (`sourceStationId`, `targetStationId`, `distanceMeters`, `durationSeconds`).
 
-export interface BaseNode {
-  id: string;             // UUID unique (ex: "stop_123", "wp_456")
-  type: NodeType;
-  coordinates: Coordinates;
-  createdAt: number;
-}
-
-export interface StopNode extends BaseNode {
-  type: 'stop';
-  name: string;           // Ex: "Gare Centrale"
-  code?: string;          // Ex: "GC-01"
-  isTransfer: boolean;    // Pôle d'échange multi-lignes
-  linesServed: string[];  // Liste des IDs des lignes desservant cet arrêt
-  transferDurationSec?: number; // Temps de correspondance à pied (ex: 120s)
-}
-
-export interface WaypointNode extends BaseNode {
-  type: 'waypoint';
-  lineId: string;         // Ligne parente
-  order: number;          // Ordre séquentiel sur le tracé
-}
-```
-
-### 3. La Ligne de Transport
-Une ligne est une séquence ordonnée d'identifiants de nœuds (`pathNodeIds`). Elle contient également ses propriétés physiques et opérationnelles :
-
-```typescript
-export type TransportMode = 'bus' | 'tram' | 'metro' | 'train' | 'cable_car';
-
-export interface TransportLine {
-  id: string;               // Ex: "line_t1"
-  name: string;             // Ex: "Tramway T1 - Est/Ouest"
-  shortName: string;        // Ex: "T1"
-  color: string;            // Ex: "#0ea5e9"
-  mode: TransportMode;
-  isActive: boolean;        // Visibilité active sur la carte (true/false)
-  averageSpeedKmh: number;  // Vitesse commerciale (ex: 22 km/h)
-  frequencyMinutes: number; // Fréquence de passage
-  pathNodeIds: string[];    // Séquence : ['stop_1', 'wp_1', 'stop_2', ...]
-}
-```
+### C. Moteur de Génération du Graphe (`geo.ts`)
+La fonction `buildTransportGraph(lines, stops, waypoints): TransportGraph` génère dynamiquement l'intégralité du réseau de propriétés pour alimenter l'interface et les algorithmes de recherche de chemin (Dijkstra multimodal avec filtrage horaire et PMR).
 
 ---
 

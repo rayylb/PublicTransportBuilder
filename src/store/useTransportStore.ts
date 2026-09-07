@@ -14,6 +14,14 @@ export interface SelectedElement {
   id: string;
 }
 
+interface HistorySnapshot {
+  stops: Record<string, StopNode>;
+  waypoints: Record<string, WaypointNode>;
+  lines: Record<string, TransportLine>;
+  activeLineId: string | null;
+  drawingEnd: 'start' | 'end';
+}
+
 interface TransportStoreState {
   stops: Record<string, StopNode>;
   waypoints: Record<string, WaypointNode>;
@@ -25,6 +33,10 @@ interface TransportStoreState {
   selectedElement: SelectedElement | null;
   editingStopId: string | null;
   showStationLabels: boolean;
+
+  canUndo: boolean;
+  _undoStack: HistorySnapshot[];
+  undo: () => void;
 
   setActiveTool: (tool: ToolType) => void;
   setActiveLineId: (lineId: string | null) => void;
@@ -43,6 +55,14 @@ interface TransportStoreState {
     shortName: string;
     color: string;
     mode: TransportMode;
+    averageSpeedKmh?: number;
+    peakFrequencyMinutes?: number;
+    offPeakFrequencyMinutes?: number;
+    nightFrequencyMinutes?: number;
+    firstDeparture?: string;
+    lastDeparture?: string;
+    isBidirectional?: boolean;
+    isAccessiblePMR?: boolean;
   }) => string;
   updateLine: (id: string, updates: Partial<Omit<TransportLine, 'id'>>) => void;
   deleteLine: (id: string) => void;
@@ -53,6 +73,7 @@ interface TransportStoreState {
   createAndAppendWaypoint: (lineId: string, coords: Coordinates) => string;
   createAndPrependWaypoint: (lineId: string, coords: Coordinates) => string;
   removeNodeFromLine: (lineId: string, nodeIndex: number) => void;
+  deleteWaypoint: (waypointId: string) => void;
   reverseLinePath: (lineId: string) => void;
 
   loadSampleData: () => void;
@@ -61,6 +82,34 @@ interface TransportStoreState {
 
 const generateId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+const MAX_UNDO_DEPTH = 30;
+
+function pushSnapshot(state: TransportStoreState): { _undoStack: HistorySnapshot[]; canUndo: boolean } {
+  const snapshot: HistorySnapshot = {
+    stops: state.stops,
+    waypoints: state.waypoints,
+    lines: state.lines,
+    activeLineId: state.activeLineId,
+    drawingEnd: state.drawingEnd,
+  };
+  const newStack = [...(state._undoStack || []), snapshot].slice(-MAX_UNDO_DEPTH);
+  return {
+    _undoStack: newStack,
+    canUndo: true,
+  };
+}
+
+const MODE_DEFAULTS: Record<
+  TransportMode,
+  { speed: number; peakFreq: number; offPeakFreq: number; nightFreq: number }
+> = {
+  metro: { speed: 30, peakFreq: 3, offPeakFreq: 6, nightFreq: 12 },
+  tram: { speed: 22, peakFreq: 5, offPeakFreq: 8, nightFreq: 15 },
+  bus: { speed: 18, peakFreq: 7, offPeakFreq: 12, nightFreq: 20 },
+  train: { speed: 60, peakFreq: 10, offPeakFreq: 20, nightFreq: 30 },
+  cable_car: { speed: 15, peakFreq: 5, offPeakFreq: 10, nightFreq: 20 },
+};
 
 export const useTransportStore = create<TransportStoreState>((set, get) => ({
   stops: {},
@@ -72,6 +121,28 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
   selectedElement: null,
   editingStopId: null,
   showStationLabels: true,
+
+  canUndo: false,
+  _undoStack: [],
+
+  undo: () => {
+    set((state) => {
+      if (!state._undoStack || state._undoStack.length === 0) return state;
+      const stack = [...state._undoStack];
+      const previous = stack.pop();
+      if (!previous) return state;
+
+      return {
+        stops: previous.stops,
+        waypoints: previous.waypoints,
+        lines: previous.lines,
+        activeLineId: previous.activeLineId,
+        drawingEnd: previous.drawingEnd,
+        _undoStack: stack,
+        canUndo: stack.length > 0,
+      };
+    });
+  },
 
   setActiveTool: (tool) => set({ activeTool: tool }),
 
@@ -116,14 +187,20 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       isTransfer: false,
       linesServed: [],
       transferDurationSec: 120,
+      fareZone: 1,
+      isAccessiblePMR: true,
       createdAt: Date.now(),
     };
 
-    set((state) => ({
-      stops: { ...state.stops, [id]: newStop },
-      editingStopId: id,
-      selectedElement: { type: 'stop', id },
-    }));
+    set((state) => {
+      const historyUpdate = pushSnapshot(state);
+      return {
+        ...historyUpdate,
+        stops: { ...state.stops, [id]: newStop },
+        editingStopId: id,
+        selectedElement: { type: 'stop', id },
+      };
+    });
 
     return id;
   },
@@ -132,7 +209,9 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     set((state) => {
       const existing = state.stops[id];
       if (!existing) return state;
+      const historyUpdate = pushSnapshot(state);
       return {
+        ...historyUpdate,
         stops: {
           ...state.stops,
           [id]: { ...existing, ...updates },
@@ -143,6 +222,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
 
   deleteStop: (id) => {
     set((state) => {
+      const historyUpdate = pushSnapshot(state);
       const newStops = { ...state.stops };
       delete newStops[id];
 
@@ -155,6 +235,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       });
 
       return {
+        ...historyUpdate,
         stops: newStops,
         lines: newLines,
         editingStopId: state.editingStopId === id ? null : state.editingStopId,
@@ -163,27 +244,54 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     });
   },
 
-  createLine: ({ name, shortName, color, mode }) => {
+  createLine: ({
+    name,
+    shortName,
+    color,
+    mode,
+    averageSpeedKmh,
+    peakFrequencyMinutes,
+    offPeakFrequencyMinutes,
+    nightFrequencyMinutes,
+    firstDeparture = '05:30',
+    lastDeparture = '01:00',
+    isBidirectional = true,
+    isAccessiblePMR = true,
+  }) => {
     const id = generateId('line');
+    const defaults = MODE_DEFAULTS[mode] || MODE_DEFAULTS.tram;
+
     const newLine: TransportLine = {
       id,
       name,
       shortName,
       color,
       mode,
+      category: mode,
       isActive: true,
-      averageSpeedKmh: mode === 'metro' ? 30 : mode === 'tram' ? 22 : mode === 'train' ? 60 : 18,
-      frequencyMinutes: mode === 'metro' ? 4 : 6,
+      averageSpeedKmh: averageSpeedKmh || defaults.speed,
+      peakFrequencyMinutes: peakFrequencyMinutes || defaults.peakFreq,
+      offPeakFrequencyMinutes: offPeakFrequencyMinutes || defaults.offPeakFreq,
+      nightFrequencyMinutes: nightFrequencyMinutes || defaults.nightFreq,
+      firstDeparture,
+      lastDeparture,
+      isBidirectional,
+      isAccessiblePMR,
+      frequencyMinutes: peakFrequencyMinutes || defaults.peakFreq,
       pathNodeIds: [],
     };
 
-    set((state) => ({
-      lines: { ...state.lines, [id]: newLine },
-      activeLineId: id,
-      activeTool: 'draw_line',
-      drawingEnd: 'end',
-      selectedElement: { type: 'line', id },
-    }));
+    set((state) => {
+      const historyUpdate = pushSnapshot(state);
+      return {
+        ...historyUpdate,
+        lines: { ...state.lines, [id]: newLine },
+        activeLineId: id,
+        activeTool: 'draw_line',
+        drawingEnd: 'end',
+        selectedElement: { type: 'line', id },
+      };
+    });
 
     return id;
   },
@@ -192,7 +300,9 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
     set((state) => {
       const existing = state.lines[id];
       if (!existing) return state;
+      const historyUpdate = pushSnapshot(state);
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [id]: { ...existing, ...updates },
@@ -203,6 +313,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
 
   deleteLine: (id) => {
     set((state) => {
+      const historyUpdate = pushSnapshot(state);
       const newLines = { ...state.lines };
       delete newLines[id];
 
@@ -222,6 +333,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       });
 
       return {
+        ...historyUpdate,
         lines: newLines,
         waypoints: newWaypoints,
         stops: newStops,
@@ -241,12 +353,14 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const lastNodeId = line.pathNodeIds[line.pathNodeIds.length - 1];
       if (lastNodeId === stopId) return state;
 
+      const historyUpdate = pushSnapshot(state);
       const updatedPath = [...line.pathNodeIds, stopId];
       const updatedLinesServed = stop.linesServed.includes(lineId)
         ? stop.linesServed
         : [...stop.linesServed, lineId];
 
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [lineId]: { ...line, pathNodeIds: updatedPath },
@@ -273,12 +387,14 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const firstNodeId = line.pathNodeIds[0];
       if (firstNodeId === stopId) return state;
 
+      const historyUpdate = pushSnapshot(state);
       const updatedPath = [stopId, ...line.pathNodeIds];
       const updatedLinesServed = stop.linesServed.includes(lineId)
         ? stop.linesServed
         : [...stop.linesServed, lineId];
 
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [lineId]: { ...line, pathNodeIds: updatedPath },
@@ -302,6 +418,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const stop = state.stops[stopId];
       if (!line || !stop) return state;
 
+      const historyUpdate = pushSnapshot(state);
       const updatedPath = [...line.pathNodeIds];
       updatedPath.splice(atIndex, 0, stopId);
 
@@ -310,6 +427,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
         : [...stop.linesServed, lineId];
 
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [lineId]: { ...line, pathNodeIds: updatedPath },
@@ -347,7 +465,9 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const targetLine = state.lines[lineId];
       if (!targetLine) return state;
 
+      const historyUpdate = pushSnapshot(state);
       return {
+        ...historyUpdate,
         waypoints: { ...state.waypoints, [wpId]: newWaypoint },
         lines: {
           ...state.lines,
@@ -382,7 +502,9 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const targetLine = state.lines[lineId];
       if (!targetLine) return state;
 
+      const historyUpdate = pushSnapshot(state);
       return {
+        ...historyUpdate,
         waypoints: { ...state.waypoints, [wpId]: newWaypoint },
         lines: {
           ...state.lines,
@@ -402,6 +524,7 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const line = state.lines[lineId];
       if (!line) return state;
 
+      const historyUpdate = pushSnapshot(state);
       const nodeIdToRemove = line.pathNodeIds[nodeIndex];
       const updatedPath = line.pathNodeIds.filter((_, idx) => idx !== nodeIndex);
 
@@ -411,11 +534,36 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       }
 
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [lineId]: { ...line, pathNodeIds: updatedPath },
         },
         waypoints: newWaypoints,
+      };
+    });
+  },
+
+  deleteWaypoint: (waypointId: string) => {
+    set((state) => {
+      const historyUpdate = pushSnapshot(state);
+      const newWaypoints = { ...state.waypoints };
+      delete newWaypoints[waypointId];
+
+      const newLines = { ...state.lines };
+      Object.keys(newLines).forEach((lineId) => {
+        if (newLines[lineId].pathNodeIds.includes(waypointId)) {
+          newLines[lineId] = {
+            ...newLines[lineId],
+            pathNodeIds: newLines[lineId].pathNodeIds.filter((id) => id !== waypointId),
+          };
+        }
+      });
+
+      return {
+        ...historyUpdate,
+        waypoints: newWaypoints,
+        lines: newLines,
       };
     });
   },
@@ -426,7 +574,9 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       const line = state.lines[lineId];
       if (!line) return state;
 
+      const historyUpdate = pushSnapshot(state);
       return {
+        ...historyUpdate,
         lines: {
           ...state.lines,
           [lineId]: {
@@ -439,10 +589,10 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
   },
 
   loadSampleData: () => {
-    const s1: StopNode = { id: 'stop_1', type: 'stop', name: 'Gare Centrale', code: 'GC-01', coordinates: { lng: 2.3522, lat: 48.8566 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 120, createdAt: 1 };
-    const s2: StopNode = { id: 'stop_2', type: 'stop', name: 'Place de la République', code: 'REP', coordinates: { lng: 2.3634, lat: 48.8675 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 90, createdAt: 2 };
-    const s3: StopNode = { id: 'stop_3', type: 'stop', name: 'Parc des Expositions', code: 'PEX', coordinates: { lng: 2.3850, lat: 48.8750 }, isTransfer: false, linesServed: ['line_t1'], transferDurationSec: 60, createdAt: 3 };
-    const s4: StopNode = { id: 'stop_4', type: 'stop', name: 'Université Campus', code: 'UNI', coordinates: { lng: 2.3488, lat: 48.8462 }, isTransfer: false, linesServed: ['line_b2'], transferDurationSec: 60, createdAt: 4 };
+    const s1: StopNode = { id: 'stop_1', type: 'stop', name: 'Gare Centrale', code: 'GC-01', coordinates: { lng: 2.3522, lat: 48.8566 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 120, fareZone: 1, isAccessiblePMR: true, createdAt: 1 };
+    const s2: StopNode = { id: 'stop_2', type: 'stop', name: 'Place de la République', code: 'REP', coordinates: { lng: 2.3634, lat: 48.8675 }, isTransfer: true, linesServed: ['line_t1', 'line_b2'], transferDurationSec: 90, fareZone: 1, isAccessiblePMR: true, createdAt: 2 };
+    const s3: StopNode = { id: 'stop_3', type: 'stop', name: 'Parc des Expositions', code: 'PEX', coordinates: { lng: 2.3850, lat: 48.8750 }, isTransfer: false, linesServed: ['line_t1'], transferDurationSec: 60, fareZone: 2, isAccessiblePMR: true, createdAt: 3 };
+    const s4: StopNode = { id: 'stop_4', type: 'stop', name: 'Université Campus', code: 'UNI', coordinates: { lng: 2.3488, lat: 48.8462 }, isTransfer: false, linesServed: ['line_b2'], transferDurationSec: 60, fareZone: 1, isAccessiblePMR: true, createdAt: 4 };
 
     const wp1: WaypointNode = { id: 'wp_1', type: 'waypoint', coordinates: { lng: 2.3580, lat: 48.8620 }, lineId: 'line_t1', order: 1, createdAt: 5 };
 
@@ -452,9 +602,17 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       shortName: 'T1',
       color: '#0ea5e9',
       mode: 'tram',
+      category: 'tram',
       isActive: true,
       averageSpeedKmh: 22,
-      frequencyMinutes: 5,
+      peakFrequencyMinutes: 4,
+      offPeakFrequencyMinutes: 7,
+      nightFrequencyMinutes: 15,
+      firstDeparture: '05:30',
+      lastDeparture: '01:15',
+      isBidirectional: true,
+      isAccessiblePMR: true,
+      frequencyMinutes: 4,
       pathNodeIds: ['stop_1', 'wp_1', 'stop_2', 'stop_3'],
     };
 
@@ -464,36 +622,52 @@ export const useTransportStore = create<TransportStoreState>((set, get) => ({
       shortName: 'B2',
       color: '#f59e0b',
       mode: 'bus',
+      category: 'bus',
       isActive: true,
       averageSpeedKmh: 18,
-      frequencyMinutes: 8,
+      peakFrequencyMinutes: 6,
+      offPeakFrequencyMinutes: 12,
+      nightFrequencyMinutes: 20,
+      firstDeparture: '06:00',
+      lastDeparture: '00:30',
+      isBidirectional: true,
+      isAccessiblePMR: true,
+      frequencyMinutes: 6,
       pathNodeIds: ['stop_4', 'stop_1', 'wp_1', 'stop_2'],
     };
 
-    set({
-      stops: { stop_1: s1, stop_2: s2, stop_3: s3, stop_4: s4 },
-      waypoints: { wp_1: wp1 },
-      lines: { line_t1: lineT1, line_b2: lineB2 },
-      activeTool: 'select',
-      activeLineId: 'line_t1',
-      drawingEnd: 'end',
-      selectedElement: null,
-      editingStopId: null,
-      showStationLabels: true,
+    set((state) => {
+      const historyUpdate = pushSnapshot(state);
+      return {
+        ...historyUpdate,
+        stops: { stop_1: s1, stop_2: s2, stop_3: s3, stop_4: s4 },
+        waypoints: { wp_1: wp1 },
+        lines: { line_t1: lineT1, line_b2: lineB2 },
+        activeTool: 'select',
+        activeLineId: 'line_t1',
+        drawingEnd: 'end',
+        selectedElement: null,
+        editingStopId: null,
+        showStationLabels: true,
+      };
     });
   },
 
   clearAll: () => {
-    set({
-      stops: {},
-      waypoints: {},
-      lines: {},
-      activeTool: 'select',
-      activeLineId: null,
-      drawingEnd: 'end',
-      selectedElement: null,
-      editingStopId: null,
-      showStationLabels: true,
+    set((state) => {
+      const historyUpdate = pushSnapshot(state);
+      return {
+        ...historyUpdate,
+        stops: {},
+        waypoints: {},
+        lines: {},
+        activeTool: 'select',
+        activeLineId: null,
+        drawingEnd: 'end',
+        selectedElement: null,
+        editingStopId: null,
+        showStationLabels: true,
+      };
     });
   },
 }));

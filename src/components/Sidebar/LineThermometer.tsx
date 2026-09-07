@@ -23,6 +23,9 @@ import {
   Gauge,
   Sparkles,
   Palette,
+  Accessibility,
+  Sunrise,
+  Sunset,
 } from 'lucide-react';
 import { useTransportStore } from '../../store/useTransportStore';
 import type { TransportLine, TransportMode } from '../../types/transport';
@@ -187,13 +190,49 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
                 {MODE_LABELS[line.mode].icon}
                 <span>{MODE_LABELS[line.mode].label}</span>
               </span>
-              <span className="line-hero-freq-pill">
-                <Clock size={11} />
-                <span>Toutes les {line.frequencyMinutes || 6} min</span>
-              </span>
               <span className="line-hero-speed-pill">
                 <Gauge size={11} />
                 <span>~{line.averageSpeedKmh} km/h</span>
+              </span>
+              <span className="line-hero-mode-pill" title="Amplitude horaire du service">
+                <Clock size={11} />
+                <span>{line.firstDeparture || '05:30'} - {line.lastDeparture || '01:00'}</span>
+              </span>
+              {line.isAccessiblePMR !== false && (
+                <span className="line-hero-mode-pill pmr" title="Ligne accessible PMR / Fauteuil roulant">
+                  <Accessibility size={11} />
+                  <span>PMR</span>
+                </span>
+              )}
+              {line.isBidirectional === false && (
+                <span className="line-hero-mode-pill oneway" title="Ligne à sens unique">
+                  <span>Sens Unique</span>
+                </span>
+              )}
+            </div>
+
+            {/* Tranches horaires de fréquence */}
+            <div className="line-hero-frequencies-row">
+              <span
+                className="freq-pill peak"
+                title="Fréquence en heures de pointe (Matin / Soir)"
+              >
+                <Clock size={10} />
+                <span>Pointe : {line.peakFrequencyMinutes || 5} min</span>
+              </span>
+              <span
+                className="freq-pill offpeak"
+                title="Fréquence en heures creuses (Journée)"
+              >
+                <Clock size={10} />
+                <span>Creuse : {line.offPeakFrequencyMinutes || 8} min</span>
+              </span>
+              <span
+                className="freq-pill night"
+                title="Fréquence en soirée et la nuit"
+              >
+                <Clock size={10} />
+                <span>Nuit : {line.nightFrequencyMinutes || 15} min</span>
               </span>
             </div>
           </div>
@@ -283,11 +322,9 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
               <ArrowRightLeft size={13} />
             </div>
             <span className="kpi-value">
-              {metrics.stopsCount > 1
-                ? formatDistance(metrics.averageInterStationDistanceKm)
-                : '—'}
+              {metrics.suiviEdges.length > 0 ? `${metrics.suiviEdges.length} arêtes` : '—'}
             </span>
-            <span className="kpi-label">Inter-station</span>
+            <span className="kpi-label">Tronçons SUIVI</span>
           </div>
         </div>
       </div>
@@ -296,7 +333,7 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
       {showSettings && (
         <div className="line-edit-panel">
           <div className="edit-panel-header">
-            <h4>Paramètres de la Ligne</h4>
+            <h4>Paramètres de la Ligne & Graphe</h4>
             <span className="edit-panel-hint">Modifications appliquées en temps réel</span>
           </div>
 
@@ -320,10 +357,13 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
               />
             </div>
             <div className="form-group flex-1">
-              <label>Mode de transport</label>
+              <label>Mode / Catégorie</label>
               <select
                 value={line.mode}
-                onChange={(e) => updateLine(line.id, { mode: e.target.value as TransportMode })}
+                onChange={(e) => {
+                  const m = e.target.value as TransportMode;
+                  updateLine(line.id, { mode: m, category: m });
+                }}
               >
                 <option value="tram">Tramway</option>
                 <option value="metro">Métro</option>
@@ -348,16 +388,104 @@ export const LineThermometer: React.FC<LineThermometerProps> = ({ line, onBack }
               />
             </div>
             <div className="form-group flex-1">
-              <label>Fréquence de passage (min)</label>
+              <label>Sens de circulation</label>
+              <select
+                value={line.isBidirectional === false ? 'oneway' : 'bidirectional'}
+                onChange={(e) => updateLine(line.id, { isBidirectional: e.target.value === 'bidirectional' })}
+              >
+                <option value="bidirectional">Aller-Retour (2 sens)</option>
+                <option value="oneway">Sens Unique (1 sens)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Amplitude horaire */}
+          <div className="form-row">
+            <div className="form-group flex-1">
+              <label className="freq-input-label">
+                <Sunrise size={11} style={{ display: 'inline', marginRight: 4 }} />
+                Premier départ
+              </label>
               <input
-                type="number"
-                value={line.frequencyMinutes}
-                onChange={(e) =>
-                  updateLine(line.id, { frequencyMinutes: Math.max(1, Number(e.target.value) || 5) })
-                }
-                min={1}
-                max={120}
+                type="time"
+                value={line.firstDeparture || '05:30'}
+                onChange={(e) => updateLine(line.id, { firstDeparture: e.target.value })}
               />
+            </div>
+            <div className="form-group flex-1">
+              <label className="freq-input-label">
+                <Sunset size={11} style={{ display: 'inline', marginRight: 4 }} />
+                Dernier départ
+              </label>
+              <input
+                type="time"
+                value={line.lastDeparture || '01:00'}
+                onChange={(e) => updateLine(line.id, { lastDeparture: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {/* Accessibilité PMR */}
+          <div className="form-group">
+            <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={line.isAccessiblePMR !== false}
+                onChange={(e) => updateLine(line.id, { isAccessiblePMR: e.target.checked })}
+              />
+              <span>Matériel roulant accessible PMR (Fauteuil roulant)</span>
+            </label>
+          </div>
+
+          {/* Configuration des 3 fréquences par tranche horaire */}
+          <div className="frequencies-config-box">
+            <label className="section-sub-label">Fréquences par tranche horaire (min)</label>
+            <div className="form-row three-cols">
+              <div className="form-group flex-1">
+                <label className="freq-input-label peak">🔴 Pointe</label>
+                <input
+                  type="number"
+                  value={line.peakFrequencyMinutes || 5}
+                  onChange={(e) =>
+                    updateLine(line.id, {
+                      peakFrequencyMinutes: Math.max(1, Number(e.target.value) || 3),
+                      frequencyMinutes: Math.max(1, Number(e.target.value) || 3),
+                    })
+                  }
+                  min={1}
+                  max={60}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label className="freq-input-label offpeak">🟡 Creuse</label>
+                <input
+                  type="number"
+                  value={line.offPeakFrequencyMinutes || 8}
+                  onChange={(e) =>
+                    updateLine(line.id, {
+                      offPeakFrequencyMinutes: Math.max(1, Number(e.target.value) || 5),
+                    })
+                  }
+                  min={1}
+                  max={120}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label className="freq-input-label night">🌙 Nuit</label>
+                <input
+                  type="number"
+                  value={line.nightFrequencyMinutes || 15}
+                  onChange={(e) =>
+                    updateLine(line.id, {
+                      nightFrequencyMinutes: Math.max(1, Number(e.target.value) || 10),
+                    })
+                  }
+                  min={1}
+                  max={120}
+                />
+              </div>
             </div>
           </div>
 

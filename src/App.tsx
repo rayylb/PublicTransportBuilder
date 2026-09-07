@@ -1,14 +1,38 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MapView } from './components/MapView';
 import { Toolbar } from './components/Toolbar';
 import { NetworkSidebar } from './components/Sidebar/NetworkSidebar';
 import { BasemapSelector } from './components/BasemapSelector';
 import { Network } from 'lucide-react';
+import { useTransportStore } from './store/useTransportStore';
 import type { BasemapId } from './types/transport';
 import './App.css';
 
 export function App() {
   const [activeBasemap, setActiveBasemap] = useState<BasemapId>('osm');
+  const undo = useTransportStore((s) => s.undo);
+
+  // Raccourci clavier global Ctrl + Z / Cmd + Z pour annuler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignorer si l'utilisateur est en train d'écrire dans un champ de formulaire
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo]);
 
   return (
     <div className="app-split-container">

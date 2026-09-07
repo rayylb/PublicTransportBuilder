@@ -11,6 +11,7 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Undo2,
 } from 'lucide-react';
 import { useTransportStore, type ToolType } from '../store/useTransportStore';
 
@@ -19,6 +20,7 @@ export const Toolbar: React.FC = () => {
     activeTool,
     setActiveTool,
     activeLineId,
+    setActiveLineId,
     drawingEnd,
     setDrawingEnd,
     reverseLinePath,
@@ -27,9 +29,27 @@ export const Toolbar: React.FC = () => {
     toggleShowStationLabels,
     loadSampleData,
     clearAll,
+    undo,
+    canUndo,
+    setSelectedElement,
   } = useTransportStore();
 
+  const lineList = Object.values(lines);
   const activeLine = activeLineId ? lines[activeLineId] : null;
+
+  const handleSelectTool = (tool: ToolType) => {
+    setActiveTool(tool);
+    if (tool === 'draw_line') {
+      let targetId = activeLineId;
+      if (!targetId && lineList.length > 0) {
+        targetId = lineList[0].id;
+        setActiveLineId(targetId);
+      }
+      if (targetId) {
+        setSelectedElement({ type: 'line', id: targetId });
+      }
+    }
+  };
 
   const tools: { id: ToolType; label: string; icon: React.ReactNode; tooltip: string }[] = [
     {
@@ -48,7 +68,7 @@ export const Toolbar: React.FC = () => {
       id: 'draw_line',
       label: 'Tracer Ligne',
       icon: <PenTool size={15} />,
-      tooltip: 'Relier des arrêts ou créer des virages (waypoints automatiques)',
+      tooltip: 'Relier des arrêts ou créer des virages (ouvre le thermomètre)',
     },
   ];
 
@@ -63,7 +83,7 @@ export const Toolbar: React.FC = () => {
               key={t.id}
               type="button"
               className={`toolbar-segment-btn ${isActive ? 'active' : ''}`}
-              onClick={() => setActiveTool(t.id)}
+              onClick={() => handleSelectTool(t.id)}
               title={t.tooltip}
             >
               <span className="tool-btn-icon">{t.icon}</span>
@@ -75,6 +95,18 @@ export const Toolbar: React.FC = () => {
 
       {/* Ligne 2 : Actions et Affichage */}
       <div className="toolbar-actions-row">
+        {/* Bouton Annuler Ctrl+Z */}
+        <button
+          type="button"
+          className={`toolbar-chip-btn ${canUndo ? 'active' : 'disabled'}`}
+          onClick={undo}
+          disabled={!canUndo}
+          title="Annuler la dernière action (Ctrl + Z)"
+        >
+          <Undo2 size={13} />
+          <span>Annuler</span>
+        </button>
+
         {/* Bouton pour afficher/masquer le nom des stations */}
         <button
           type="button"
@@ -83,7 +115,7 @@ export const Toolbar: React.FC = () => {
           title={showStationLabels ? 'Masquer les noms des stations' : 'Afficher les noms des stations'}
         >
           {showStationLabels ? <Tag size={13} /> : <EyeOff size={13} />}
-          <span>{showStationLabels ? 'Noms : Visibles' : 'Noms : Masqués'}</span>
+          <span>{showStationLabels ? 'Noms ON' : 'Noms OFF'}</span>
         </button>
 
         {/* Bouton Démo */}
@@ -94,7 +126,7 @@ export const Toolbar: React.FC = () => {
           title="Charger le réseau exemple (Paris - Tram T1 & Bus B2)"
         >
           <Sparkles size={13} />
-          <span>Exemple Paris</span>
+          <span>Exemple</span>
         </button>
 
         {/* Bouton Vider */}
@@ -128,15 +160,27 @@ export const Toolbar: React.FC = () => {
                     Tracé : <strong>{activeLine.name}</strong> ({activeLine.pathNodeIds.length} pts)
                   </span>
                 </div>
-                <button
-                  type="button"
-                  className="finish-drawing-btn"
-                  onClick={() => setActiveTool('select')}
-                  title="Terminer le tracé"
-                >
-                  <Check size={13} />
-                  <span>Terminer</span>
-                </button>
+                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    className="btn-undo-drawing"
+                    onClick={undo}
+                    disabled={!canUndo}
+                    title="Annuler le dernier point (Ctrl + Z)"
+                  >
+                    <Undo2 size={12} />
+                    <span>Annuler</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="finish-drawing-btn"
+                    onClick={() => setActiveTool('select')}
+                    title="Terminer le tracé"
+                  >
+                    <Check size={13} />
+                    <span>Terminer</span>
+                  </button>
+                </div>
               </div>
 
               {/* Sélecteur de l'extrémité à prolonger (Départ ou Terminus) et Inversion */}

@@ -40,6 +40,7 @@ export const NetworkSidebar: React.FC = () => {
     lines,
     stops,
     waypoints,
+    activeTool,
     activeLineId,
     selectedElement,
     showStationLabels,
@@ -63,6 +64,40 @@ export const NetworkSidebar: React.FC = () => {
   const [newLineShortName, setNewLineShortName] = useState('T1');
   const [newLineColor, setNewLineColor] = useState('#0ea5e9');
   const [newLineMode, setNewLineMode] = useState<TransportMode>('tram');
+  const [newLinePeakFreq, setNewLinePeakFreq] = useState(5);
+  const [newLineOffPeakFreq, setNewLineOffPeakFreq] = useState(8);
+  const [newLineNightFreq, setNewLineNightFreq] = useState(15);
+  const [newLineSpeed, setNewLineSpeed] = useState(22);
+
+  const handleModeChange = (mode: TransportMode) => {
+    setNewLineMode(mode);
+    if (mode === 'metro') {
+      setNewLinePeakFreq(3);
+      setNewLineOffPeakFreq(6);
+      setNewLineNightFreq(12);
+      setNewLineSpeed(30);
+    } else if (mode === 'tram') {
+      setNewLinePeakFreq(5);
+      setNewLineOffPeakFreq(8);
+      setNewLineNightFreq(15);
+      setNewLineSpeed(22);
+    } else if (mode === 'bus') {
+      setNewLinePeakFreq(7);
+      setNewLineOffPeakFreq(12);
+      setNewLineNightFreq(20);
+      setNewLineSpeed(18);
+    } else if (mode === 'train') {
+      setNewLinePeakFreq(10);
+      setNewLineOffPeakFreq(20);
+      setNewLineNightFreq(30);
+      setNewLineSpeed(60);
+    } else if (mode === 'cable_car') {
+      setNewLinePeakFreq(5);
+      setNewLineOffPeakFreq(10);
+      setNewLineNightFreq(20);
+      setNewLineSpeed(15);
+    }
+  };
 
   const handleCreateLineSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,6 +108,10 @@ export const NetworkSidebar: React.FC = () => {
       shortName: newLineShortName.trim() || 'L1',
       color: newLineColor,
       mode: newLineMode,
+      averageSpeedKmh: newLineSpeed,
+      peakFrequencyMinutes: newLinePeakFreq,
+      offPeakFrequencyMinutes: newLineOffPeakFreq,
+      nightFrequencyMinutes: newLineNightFreq,
     });
 
     // Reset du formulaire
@@ -82,14 +121,17 @@ export const NetworkSidebar: React.FC = () => {
     setSelectedElement({ type: 'line', id: newId });
   };
 
+  const effectiveTab = activeTool === 'draw_line' ? 'lines' : activeTab;
   const lineList = Object.values(lines);
   const stopList = Object.values(stops);
 
-  // Ligne actuellement sélectionnée pour le thermomètre
+  // Ligne actuellement sélectionnée pour le thermomètre (ou ligne active lors du tracé)
   const selectedLine =
     selectedElement?.type === 'line' && lines[selectedElement.id]
       ? lines[selectedElement.id]
-      : null;
+      : activeTool === 'draw_line' && activeLineId && lines[activeLineId]
+        ? lines[activeLineId]
+        : null;
 
   return (
     <aside className="network-sidebar">
@@ -97,7 +139,7 @@ export const NetworkSidebar: React.FC = () => {
       <div className="sidebar-tabs">
         <button
           type="button"
-          className={`sidebar-tab ${activeTab === 'lines' ? 'active' : ''}`}
+          className={`sidebar-tab ${effectiveTab === 'lines' ? 'active' : ''}`}
           onClick={() => setActiveTab('lines')}
         >
           <Route size={15} />
@@ -105,7 +147,7 @@ export const NetworkSidebar: React.FC = () => {
         </button>
         <button
           type="button"
-          className={`sidebar-tab ${activeTab === 'stops' ? 'active' : ''}`}
+          className={`sidebar-tab ${effectiveTab === 'stops' ? 'active' : ''}`}
           onClick={() => setActiveTab('stops')}
         >
           <MapPin size={15} />
@@ -115,7 +157,7 @@ export const NetworkSidebar: React.FC = () => {
 
       <div className="sidebar-content">
         {/* ================= ONGLET LIGNES ================= */}
-        {activeTab === 'lines' && (
+        {effectiveTab === 'lines' && (
           <div className="tab-pane">
             {/* Si une ligne est sélectionnée, afficher directement son Thermomètre exhaustif */}
             {selectedLine ? (
@@ -169,7 +211,7 @@ export const NetworkSidebar: React.FC = () => {
                         <label>Mode</label>
                         <select
                           value={newLineMode}
-                          onChange={(e) => setNewLineMode(e.target.value as TransportMode)}
+                          onChange={(e) => handleModeChange(e.target.value as TransportMode)}
                         >
                           <option value="tram">Tramway</option>
                           <option value="metro">Métro</option>
@@ -177,6 +219,46 @@ export const NetworkSidebar: React.FC = () => {
                           <option value="train">Train</option>
                           <option value="cable_car">Téléphérique</option>
                         </select>
+                      </div>
+                    </div>
+
+                    {/* Fréquences par tranche horaire */}
+                    <div className="form-group">
+                      <label>Fréquences (min) : Pointe / Creuse / Nuit</label>
+                      <div className="form-row three-cols">
+                        <div className="form-group flex-1">
+                          <input
+                            type="number"
+                            value={newLinePeakFreq}
+                            onChange={(e) => setNewLinePeakFreq(Math.max(1, Number(e.target.value) || 1))}
+                            min={1}
+                            max={60}
+                            title="Heures de pointe"
+                            placeholder="Pointe"
+                          />
+                        </div>
+                        <div className="form-group flex-1">
+                          <input
+                            type="number"
+                            value={newLineOffPeakFreq}
+                            onChange={(e) => setNewLineOffPeakFreq(Math.max(1, Number(e.target.value) || 1))}
+                            min={1}
+                            max={120}
+                            title="Heures creuses"
+                            placeholder="Creuse"
+                          />
+                        </div>
+                        <div className="form-group flex-1">
+                          <input
+                            type="number"
+                            value={newLineNightFreq}
+                            onChange={(e) => setNewLineNightFreq(Math.max(1, Number(e.target.value) || 1))}
+                            min={1}
+                            max={120}
+                            title="Soirée / Nuit"
+                            placeholder="Nuit"
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -345,7 +427,7 @@ export const NetworkSidebar: React.FC = () => {
         )}
 
         {/* ================= ONGLET ARRÊTS ================= */}
-        {activeTab === 'stops' && (
+        {effectiveTab === 'stops' && (
           <div className="tab-pane">
             <div className="pane-header">
               <div className="header-title-group">
@@ -464,6 +546,40 @@ export const NetworkSidebar: React.FC = () => {
                 onChange={(e) => updateStop(selectedElement.id, { name: e.target.value })}
               />
             </div>
+
+            <div className="form-row">
+              <div className="form-group flex-1">
+                <label>Zone Tarifaire</label>
+                <input
+                  type="number"
+                  value={stops[selectedElement.id].fareZone || 1}
+                  onChange={(e) =>
+                    updateStop(selectedElement.id, {
+                      fareZone: Math.max(1, Number(e.target.value) || 1),
+                    })
+                  }
+                  min={1}
+                  max={10}
+                />
+              </div>
+
+              <div className="form-group flex-1">
+                <label>PMR</label>
+                <button
+                  type="button"
+                  className={`toolbar-chip-btn ${stops[selectedElement.id].isAccessiblePMR !== false ? 'active' : ''}`}
+                  onClick={() =>
+                    updateStop(selectedElement.id, {
+                      isAccessiblePMR: !(stops[selectedElement.id].isAccessiblePMR !== false),
+                    })
+                  }
+                  style={{ width: '100%', height: '34px', marginTop: '2px' }}
+                >
+                  <span>{stops[selectedElement.id].isAccessiblePMR !== false ? '♿ Accessible' : 'Non accessible'}</span>
+                </button>
+              </div>
+            </div>
+
             <div className="inspector-meta">
               <span>Lat: {stops[selectedElement.id].coordinates.lat.toFixed(5)}</span>
               <span>Lng: {stops[selectedElement.id].coordinates.lng.toFixed(5)}</span>

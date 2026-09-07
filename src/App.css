@@ -215,6 +215,36 @@
   flex-shrink: 0;
 }
 
+.btn-undo-drawing {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  color: #38bdf8;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.btn-undo-drawing:hover:not(:disabled) {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: rgba(14, 165, 233, 0.6);
+}
+
+.btn-undo-drawing:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-chip-btn.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .finish-drawing-btn {
   display: flex;
   align-items: center;
@@ -231,6 +261,15 @@
 
 .finish-drawing-btn:hover {
   background: rgba(16, 185, 129, 0.25);
+}
+
+.svg-waypoint-interactive {
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.svg-waypoint-interactive:hover .svg-waypoint-dot {
+  filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.9));
 }
 
 /* Contrôles du sens de tracé (Départ / Terminus) */
@@ -1028,6 +1067,86 @@
   border-radius: 4px;
   font-size: 0.68rem;
   color: var(--text-muted);
+}
+
+.line-hero-frequencies-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+}
+
+.freq-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 500;
+  border: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.freq-pill.peak {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.freq-pill.offpeak {
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.freq-pill.night {
+  color: #a78bfa;
+  border-color: rgba(139, 92, 246, 0.3);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.form-row.three-cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.45rem;
+}
+
+.frequencies-config-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.section-sub-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.freq-input-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+
+.freq-input-label.peak {
+  color: #f87171;
+}
+
+.freq-input-label.offpeak {
+  color: #fbbf24;
+}
+
+.freq-input-label.night {
+  color: #a78bfa;
 }
 
 /* Barre de changement rapide de couleur */

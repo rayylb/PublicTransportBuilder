@@ -1,4 +1,14 @@
-import type { Coordinates, StopNode, TransportLine, WaypointNode } from '../types/transport';
+import type {
+  Coordinates,
+  StopNode,
+  TransportLine,
+  WaypointNode,
+  TraceEdge,
+  SuiviEdge,
+  TransferEdge,
+  TransportGraph,
+  TimeSlot,
+} from '../types/transport';
 
 /**
  * Calcule la distance orthodromique (formule de Haversine) en kilomètres entre deux coordonnées GPS
@@ -49,6 +59,25 @@ export function formatDuration(minutes: number): string {
   return `${hours}h ${remainingMins.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Retourne la fréquence en minutes pour une tranche horaire donnée
+ */
+export function getLineFrequencyForSlot(
+  line: TransportLine,
+  slot: TimeSlot = 'peak'
+): number {
+  switch (slot) {
+    case 'peak':
+      return line.peakFrequencyMinutes || line.frequencyMinutes || 5;
+    case 'off_peak':
+      return line.offPeakFrequencyMinutes || line.frequencyMinutes || 8;
+    case 'night':
+      return line.nightFrequencyMinutes || line.frequencyMinutes || 15;
+    default:
+      return line.frequencyMinutes || 6;
+  }
+}
+
 export interface LineThermometerStopItem {
   stop: StopNode;
   nodeIndex: number;
@@ -68,10 +97,36 @@ export interface LineMetrics {
   waypointsCount: number;
   averageInterStationDistanceKm: number;
   thermometerStops: LineThermometerStopItem[];
+  traceEdges: TraceEdge[];
+  suiviEdges: SuiviEdge[];
 }
 
 /**
- * Calcule l'intégralité des métriques géométriques et la séquence du thermomètre d'une ligne
+ * Calcule dynamiquement la durée estimée de parcours d'un tronçon en secondes
+ * basée sur la distance et la vitesse commerciale de la ligne (+ 30s d'arrêt station)
+ */
+export function calculateTravelDurationSeconds(
+  distanceKm: number,
+  line: TransportLine
+): number {
+  const speed = line.averageSpeedKmh || (line.mode === 'metro' ? 30 : line.mode === 'tram' ? 22 : line.mode === 'train' ? 60 : 18);
+  const dwellTimeSeconds = 30;
+  const travelSeconds = (distanceKm / speed) * 3600;
+  return Math.round(travelSeconds + dwellTimeSeconds);
+}
+
+/**
+ * Calcule dynamiquement la durée estimée de parcours d'un tronçon en minutes
+ */
+export function calculateTravelDurationMinutes(
+  distanceKm: number,
+  line: TransportLine
+): number {
+  return calculateTravelDurationSeconds(distanceKm, line) / 60;
+}
+
+/**
+ * Calcule l'intégralité des métriques géométriques, la séquence du thermomètre et les arêtes (TRACE & SUIVI) d'une ligne
  */
 export function calculateLineMetrics(
   line: TransportLine,
@@ -81,24 +136,45 @@ export function calculateLineMetrics(
   const pathIds = line.pathNodeIds;
   const speedKmh = line.averageSpeedKmh || 20;
   const stopDwellMinutes = 0.5; // 30 secondes d'arrêt en station
+  const isBidirectional = line.isBidirectional !== false;
 
-  // 1. Calculer la distance totale de tous les segments consécutifs du tracé
+  // 1. Calculer les arêtes TRACE (segments physiques consécutifs pour l'affichage)
+  const traceEdges: TraceEdge[] = [];
   let totalDistanceKm = 0;
+
   for (let i = 0; i < pathIds.length - 1; i++) {
-    const fromNode = stops[pathIds[i]] || waypoints[pathIds[i]];
-    const toNode = stops[pathIds[i + 1]] || waypoints[pathIds[i + 1]];
+    const fromId = pathIds[i];
+    const toId = pathIds[i + 1];
+    const fromNode = stops[fromId] || waypoints[fromId];
+    const toNode = stops[toId] || waypoints[toId];
+
     if (fromNode && toNode) {
-      totalDistanceKm += calculateHaversineDistanceKm(
+      const segDistKm = calculateHaversineDistanceKm(
         fromNode.coordinates,
         toNode.coordinates
       );
+      totalDistanceKm += segDistKm;
+
+      traceEdges.push({
+        id: `trace_${line.id}_${fromId}_${toId}_${i}`,
+        type: 'TRACE',
+        lineId: line.id,
+        sourceNodeId: fromId,
+        targetNodeId: toId,
+        orderIndex: i,
+        distanceMeters: Math.round(segDistKm * 1000),
+        distanceKm: segDistKm,
+      });
     }
   }
 
-  // 2. Extraire la séquence ordonnée des arrêts commerciaux avec les distances inter-arrêts
+  // 2. Extraire la séquence ordonnée des arrêts commerciaux et générer les arêtes SUIVI
   const thermometerStops: LineThermometerStopItem[] = [];
+  const suiviEdges: SuiviEdge[] = [];
   let currentCumulativeDistanceKm = 0;
   let lastStopPathIndex = -1;
+  let lastStopId: string | null = null;
+  let suiviOrder = 0;
 
   for (let i = 0; i < pathIds.length; i++) {
     const nodeId = pathIds[i];
@@ -108,7 +184,7 @@ export function calculateLineMetrics(
       let segmentDistanceKm = 0;
       let intermediateWaypointsCount = 0;
 
-      if (lastStopPathIndex !== -1) {
+      if (lastStopPathIndex !== -1 && lastStopId) {
         // Additionner tous les segments géométriques (y compris virages/waypoints) entre lastStopPathIndex et i
         for (let j = lastStopPathIndex; j < i; j++) {
           const fromNode = stops[pathIds[j]] || waypoints[pathIds[j]];
@@ -123,11 +199,45 @@ export function calculateLineMetrics(
             intermediateWaypointsCount++;
           }
         }
+
+        const distanceMeters = Math.round(segmentDistanceKm * 1000);
+
+        // Arête SUIVI sens ALLER (forward)
+        suiviEdges.push({
+          id: `suivi_${line.id}_${lastStopId}_${stop.id}_fwd_${suiviOrder}`,
+          type: 'SUIVI',
+          lineId: line.id,
+          sourceStationId: lastStopId,
+          targetStationId: stop.id,
+          direction: 'forward',
+          orderIndex: suiviOrder,
+          distanceMeters,
+          distanceKm: segmentDistanceKm,
+          intermediateWaypointsCount,
+        });
+
+        // Arête SUIVI sens RETOUR (backward) si la ligne est bidirectionnelle
+        if (isBidirectional) {
+          suiviEdges.push({
+            id: `suivi_${line.id}_${stop.id}_${lastStopId}_bwd_${suiviOrder}`,
+            type: 'SUIVI',
+            lineId: line.id,
+            sourceStationId: stop.id,
+            targetStationId: lastStopId,
+            direction: 'backward',
+            orderIndex: suiviOrder,
+            distanceMeters,
+            distanceKm: segmentDistanceKm,
+            intermediateWaypointsCount,
+          });
+        }
+
+        suiviOrder++;
       }
 
       currentCumulativeDistanceKm += segmentDistanceKm;
 
-      // Calcul de la durée cumulée estimée : (distance / vitesse) * 60 + temps d'attente en station
+      // Calcul de la durée cumulée estimée pour l'affichage thermomètre
       const travelTimeMinutes = (currentCumulativeDistanceKm / speedKmh) * 60;
       const cumulativeDurationMinutes =
         thermometerStops.length > 0
@@ -149,6 +259,7 @@ export function calculateLineMetrics(
       });
 
       lastStopPathIndex = i;
+      lastStopId = stop.id;
     }
   }
 
@@ -174,5 +285,57 @@ export function calculateLineMetrics(
     waypointsCount,
     averageInterStationDistanceKm,
     thermometerStops,
+    traceEdges,
+    suiviEdges,
+  };
+}
+
+/**
+ * Construit la structure complète du Property Graph du réseau
+ * avec l'ensemble des Nœuds (Stations, Waypoints, Lignes)
+ * et des Arêtes (TRACE, SUIVI, TRANSFER).
+ */
+export function buildTransportGraph(
+  lines: Record<string, TransportLine>,
+  stops: Record<string, StopNode>,
+  waypoints: Record<string, WaypointNode>
+): TransportGraph {
+  const allTraceEdges: TraceEdge[] = [];
+  const allSuiviEdges: SuiviEdge[] = [];
+  const allTransferEdges: TransferEdge[] = [];
+
+  // 1. Générer les arêtes TRACE et SUIVI pour chaque ligne active
+  Object.values(lines).forEach((line) => {
+    if (line.isActive === false) return;
+    const metrics = calculateLineMetrics(line, stops, waypoints);
+    allTraceEdges.push(...metrics.traceEdges);
+    allSuiviEdges.push(...metrics.suiviEdges);
+  });
+
+  // 2. Générer les arêtes de correspondance (TRANSFER) pour les stations multi-lignes
+  Object.values(stops).forEach((stop) => {
+    if (stop.isTransfer || stop.linesServed.length > 1) {
+      allTransferEdges.push({
+        id: `transfer_${stop.id}`,
+        type: 'TRANSFER',
+        sourceStationId: stop.id,
+        targetStationId: stop.id,
+        distanceMeters: 50,
+        durationSeconds: stop.transferDurationSec || 120,
+      });
+    }
+  });
+
+  return {
+    nodes: {
+      stations: stops,
+      waypoints,
+      lines,
+    },
+    edges: {
+      traceEdges: allTraceEdges,
+      suiviEdges: allSuiviEdges,
+      transferEdges: allTransferEdges,
+    },
   };
 }

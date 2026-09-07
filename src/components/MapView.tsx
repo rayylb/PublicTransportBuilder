@@ -10,7 +10,7 @@ import { getBasemapStyle } from '../constants/basemaps';
 import { useTransportStore } from '../store/useTransportStore';
 import type { BasemapId, Coordinates } from '../types/transport';
 import { computeParallelTransitLines } from '../utils/transitGeometry';
-import { Crosshair, ZoomIn, Check, X, Trash2, ArrowRightLeft } from 'lucide-react';
+import { Crosshair, ZoomIn, Check, X, Trash2, ArrowRightLeft, Accessibility } from 'lucide-react';
 
 interface MapViewProps {
   activeBasemap?: BasemapId;
@@ -30,6 +30,7 @@ export const MapView: React.FC<MapViewProps> = ({
   const [cursorCoords, setCursorCoords] = useState<Coordinates | null>(null);
   const [currentZoom, setCurrentZoom] = useState<number>(initialZoom);
   const [hoveredStopId, setHoveredStopId] = useState<string | null>(null);
+  const [hoveredWaypointId, setHoveredWaypointId] = useState<string | null>(null);
 
   // Store Zustand
   const {
@@ -45,6 +46,7 @@ export const MapView: React.FC<MapViewProps> = ({
     addStop,
     updateStop,
     deleteStop,
+    deleteWaypoint,
     createAndAppendWaypoint,
     createAndPrependWaypoint,
     appendStopToLine,
@@ -300,18 +302,40 @@ export const MapView: React.FC<MapViewProps> = ({
         .filter((wp) => !wp.lineId || lines[wp.lineId]?.isActive !== false)
         .map((wp) => {
           const p = map.project([wp.coordinates.lng, wp.coordinates.lat]);
+          const isHovered = hoveredWaypointId === wp.id;
 
           return (
-            <circle
+            <g
               key={wp.id}
-              cx={p.x}
-              cy={p.y}
-              r={4}
-              fill="#ffffff"
-              stroke="#0284c7"
-              strokeWidth={2}
-              className="svg-waypoint-dot"
-            />
+              className={`svg-waypoint-interactive ${isHovered ? 'hovered' : ''}`}
+              transform={`translate(${p.x}, ${p.y})`}
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteWaypoint(wp.id);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                deleteWaypoint(wp.id);
+              }}
+              onMouseEnter={() => setHoveredWaypointId(wp.id)}
+              onMouseLeave={() => setHoveredWaypointId(null)}
+              style={{ cursor: 'pointer', pointerEvents: 'all' }}
+            >
+              {/* Hit area élargie */}
+              <circle r={10} fill="transparent" pointerEvents="all" />
+              {/* Point de virage visuel avec survol rouge de suppression */}
+              <circle
+                r={isHovered ? 5.5 : 4}
+                fill={isHovered ? '#ef4444' : '#ffffff'}
+                stroke={isHovered ? '#b91c1c' : '#0284c7'}
+                strokeWidth={isHovered ? 2.5 : 2}
+                className="svg-waypoint-dot"
+              />
+              {isHovered && (
+                <title>Point de virage (Clic pour supprimer)</title>
+              )}
+            </g>
           );
         })
     : null;
@@ -430,7 +454,21 @@ export const MapView: React.FC<MapViewProps> = ({
                   title="Déclarer comme pôle de correspondance"
                 >
                   <ArrowRightLeft size={12} />
-                  <span>{activeEditingStop.isTransfer ? 'Correspondance ON' : 'Correspondance'}</span>
+                  <span>{activeEditingStop.isTransfer ? 'Correspondance' : 'Correspondance'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`popup-toggle-transfer ${activeEditingStop.isAccessiblePMR !== false ? 'active' : ''}`}
+                  onClick={() =>
+                    updateStop(activeEditingStop.id, {
+                      isAccessiblePMR: !(activeEditingStop.isAccessiblePMR !== false),
+                    })
+                  }
+                  title="Accessibilité PMR (Fauteuil roulant)"
+                >
+                  <Accessibility size={12} />
+                  <span>{activeEditingStop.isAccessiblePMR !== false ? 'PMR' : 'PMR Off'}</span>
                 </button>
 
                 <button
